@@ -1,0 +1,30 @@
+# Fallback for "unable to connect to inverter": run the collector on the HOST
+# network so UDP to the inverter behaves exactly like running on the host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d
+#
+# Use this only if scripts/probe.py shows the container can't reach the inverter
+# and you can't/don't want to adjust the host firewall.
+services:
+  # Expose the internal stores on localhost so the host-networked app can reach them.
+  config-db:
+    ports: ["127.0.0.1:3306:3306"]
+  data-db:
+    ports: ["127.0.0.1:27017:27017"]
+  redis:
+    ports: ["127.0.0.1:6379:6379"]
+
+  app:
+    network_mode: host          # app now shares the host's LAN (no bridge NAT)
+    environment:
+      SM_DB_HOST: 127.0.0.1
+      SM_MONGO_HOST: 127.0.0.1
+      SM_REDIS_HOST: 127.0.0.1
+    # On host networking the app listens on the host's :8080 directly.
+
+  web:
+    # Reach the host-networked app via the host gateway instead of the "app" name.
+    environment:
+      SM_BACKEND_URL: http://host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

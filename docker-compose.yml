@@ -1,0 +1,161 @@
+# Solar Monitor v1 — brand-agnostic local solar dashboard
+#
+#   docker compose up -d --build
+#   App          -> http://<host>:8080/   (Node web tier; sign in admin / admin)
+#   phpMyAdmin   -> http://<host>:8081/   (config DB; server "config-db")
+#   mongo-express-> http://<host>:8082/   (solar data DB)
+#
+# Tiers:
+#   web   (Node)     - public web server; live stream from Redis, proxies the rest
+#   app   (Python)   - collector + API; polls inverter, writes Mongo, pushes Redis
+#   redis            - live cache + pub/sub bus between app and web
+#   config-db (MySQL)- system configuration + users
+#   data-db (Mongo)  - time-series solar readings
+#
+# The app reaches the inverter by its LAN IP (set it in the dashboard).
+# Change the passwords below before exposing anything beyond your LAN.
+
+services:
+  config-db:
+    image: mariadb:11
+    container_name: solar-monitor-config-db
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${SM_DB_NAME:-solar_monitor}
+      MARIADB_USER: ${SM_DB_USER:-solar}
+      MARIADB_PASSWORD: ${SM_DB_PASSWORD:-solar}
+      MARIADB_ROOT_PASSWORD: ${SM_DB_ROOT_PASSWORD:-change-me-root}
+    volumes:
+      - config_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "3306:3306"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: solar-monitor-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: config-db
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 64M
+    depends_on:
+      config-db:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+
+  data-db:
+    image: mongo:7
+    container_name: solar-monitor-data-db
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${SM_MONGO_USER:-solar}
+      MONGO_INITDB_ROOT_PASSWORD: ${SM_MONGO_PASSWORD:-solar}
+      MONGO_INITDB_DATABASE: ${SM_MONGO_DB:-solar_monitor}
+    volumes:
+      - data_db_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "27017:27017"
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: solar-monitor-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_SERVER: data-db
+      ME_CONFIG_MONGODB_PORT: "27017"
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${SM_MONGO_USER:-solar}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${SM_MONGO_PASSWORD:-solar}
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      data-db:
+        condition: service_healthy
+    ports:
+      - "8082:8081"
+
+  redis:
+    image: redis:7-alpine
+    container_name: solar-monitor-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  app:                              # Python collector + API (internal)
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    image: solar-monitor-app
+    container_name: solar-monitor-app
+    restart: unless-stopped
+    depends_on:
+      config-db:
+        condition: service_healthy
+      data-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SM_DB_HOST: config-db
+      SM_DB_PORT: "3306"
+      SM_DB_USER: ${SM_DB_USER:-solar}
+      SM_DB_PASSWORD: ${SM_DB_PASSWORD:-solar}
+      SM_DB_NAME: ${SM_DB_NAME:-solar_monitor}
+      SM_MONGO_HOST: data-db
+      SM_MONGO_PORT: "27017"
+      SM_MONGO_USER: ${SM_MONGO_USER:-solar}
+      SM_MONGO_PASSWORD: ${SM_MONGO_PASSWORD:-solar}
+      SM_MONGO_DB: ${SM_MONGO_DB:-solar_monitor}
+      SM_REDIS_HOST: redis
+      SM_REDIS_PORT: "6379"
+      SM_LOG_DIR: /var/log/solar-monitor
+      SM_METRICS_TOKEN: ${SM_METRICS_TOKEN:-}
+      SM_OFFLINE_TIMEOUT_SECONDS: ${SM_OFFLINE_TIMEOUT_SECONDS:-120}
+      SM_GOODWE_FAMILY: ${SM_GOODWE_FAMILY:-}     # e.g. ES for a GW####ES (skips flaky auto-detect)
+      SM_GOODWE_TIMEOUT: ${SM_GOODWE_TIMEOUT:-2}
+      SM_GITHUB_REPO: ${SM_GITHUB_REPO:-dtitsolutions/solar-tracker}
+      SM_GITHUB_BRANCH: ${SM_GITHUB_BRANCH:-main}
+      SM_GITHUB_TOKEN: ${SM_GITHUB_TOKEN:-}       # set for a PRIVATE repo
+      SM_DEPLOYED_SHA: ${GIT_SHA:-}
+      SM_UPDATE_TRIGGER: /app/.update/request
+      SM_VERSION_FILE: /app/.update/DEPLOYED_SHA
+    volumes:
+      - app_logs:/var/log/solar-monitor
+      - ./.update:/app/.update          # shared with the host updater (see scripts/)
+
+  web:                              # Node web tier (public)
+    build: ./web
+    image: solar-monitor-web
+    container_name: solar-monitor-web
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      SM_BACKEND_URL: http://app:8080
+      SM_REDIS_HOST: redis
+      SM_REDIS_PORT: "6379"
+    ports:
+      - "8080:8080"
+
+volumes:
+  config_db_data:
+  data_db_data:
+  app_logs:

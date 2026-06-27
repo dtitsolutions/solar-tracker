@@ -1,0 +1,18 @@
+# Optional: run Solar Monitor without Docker (you supply MySQL + MongoDB).
+# Set the SM_DB_* and SM_MONGO_* environment variables to point at them.
+[Unit]
+Description=Solar Monitor web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/solar-monitor
+Environment=SM_DB_HOST=127.0.0.1
+Environment=SM_MONGO_HOST=127.0.0.1
+ExecStart=/usr/bin/python3 /opt/solar-monitor/solar_monitor.py --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
