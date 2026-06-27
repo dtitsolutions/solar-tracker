@@ -16,6 +16,9 @@ COPY scripts ./scripts
 ARG GIT_SHA=""
 ENV SM_DEPLOYED_SHA=${GIT_SHA}
 
+# Ensure the self-update trigger directory exists even without the bind mount.
+RUN mkdir -p /app/.update
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

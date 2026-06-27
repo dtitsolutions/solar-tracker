@@ -44,6 +44,24 @@ _UPDATE = {
     "version_file": os.environ.get("SM_VERSION_FILE", "/app/.update/DEPLOYED_SHA"),
 }
 
+def _update_source():
+    """Effective repo/branch/token: settings in the config DB win, else env."""
+    repo = _UPDATE["repo"]
+    branch = _UPDATE["branch"]
+    token = (os.environ.get("SM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    try:
+        db = config_store.get_update_source()
+        if db.get("repo"):
+            repo = db["repo"]
+        if db.get("branch"):
+            branch = db["branch"]
+        if db.get("token"):
+            token = db["token"]
+    except Exception:
+        pass
+    return repo, branch, token
+
+
 def _deployed_sha():
     """The commit currently running: build-time env first, then a file the
     host updater writes after each deploy. Empty string if unknown."""
@@ -59,8 +77,8 @@ def _deployed_sha():
 def check_for_update():
     """Ask GitHub for the latest commit on the tracked branch and compare it
     to what is deployed. Requires outbound internet to api.github.com. Supports
-    private repos when SM_GITHUB_TOKEN is set."""
-    repo, branch = _UPDATE["repo"], _UPDATE["branch"]
+    private repos when a token is set (config DB or SM_GITHUB_TOKEN)."""
+    repo, branch, token = _update_source()
     deployed = _deployed_sha()
     known = bool(deployed)
     url = "https://api.github.com/repos/%s/commits/%s" % (repo, branch)
@@ -69,7 +87,6 @@ def check_for_update():
         "User-Agent": "solar-monitor-updater",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = (os.environ.get("SM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
@@ -78,8 +95,8 @@ def check_for_update():
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403, 404):
-            hint = ("repository is private or not found — set SM_GITHUB_TOKEN "
-                    "(a fine-grained token with read access) in your .env"
+            hint = ("repository is private or not found — add a token under "
+                    "Settings -> Updates (or set SM_GITHUB_TOKEN)"
                     if not token else
                     "token was rejected (check it has read access to %s)" % repo)
             return {"ok": False, "update_available": False, "deployed": deployed,
@@ -104,22 +121,30 @@ def check_for_update():
 def update_version():
     """Deployed version only — no internet needed. Lets the browser do the
     GitHub comparison itself when the server can't reach api.github.com."""
+    repo, branch, token = _update_source()
     deployed = _deployed_sha()
     return {
-        "ok": True, "repo": _UPDATE["repo"], "branch": _UPDATE["branch"],
+        "ok": True, "repo": repo, "branch": branch,
         "deployed": deployed, "deployed_short": deployed[:7],
         "deployed_known": bool(deployed),
-        "private": bool((os.environ.get("SM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()),
+        "private": bool(token),
     }
 
 def request_update():
     """Drop a trigger file the host-side updater watches; it does the actual
-    git pull + docker build + restart (a container can't rebuild itself)."""
+    git pull + docker build + restart (a container can't rebuild itself).
+    Creates the directory if missing and reports a clear error otherwise."""
     trig = _UPDATE["trigger"]
+    d = os.path.dirname(trig) or "."
     try:
-        os.makedirs(os.path.dirname(trig), exist_ok=True)
-    except Exception:
-        pass
+        os.makedirs(d, exist_ok=True)
+    except Exception as e:                                # noqa: BLE001
+        raise RuntimeError(
+            "the update directory %s is not available in the container — make sure "
+            "docker-compose.yml mounts it (volumes: - ./.update:/app/.update) and "
+            "rebuild (%s)" % (d, e))
+    if not os.access(d, os.W_OK):
+        raise RuntimeError("the update directory %s is not writable by the app" % d)
     with open(trig, "w", encoding="utf-8") as f:
         f.write("update requested at %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     return {"trigger": trig}
@@ -1251,6 +1276,19 @@ class Handler(BaseHTTPRequestHandler):
                     updates["timezone"] = new_tz
                 if isinstance(d.get("remote_db"), dict):
                     updates["remote_db"] = d["remote_db"]
+                if isinstance(d.get("updates"), dict):
+                    src = d["updates"]
+                    clean = {}
+                    if "repo" in src:
+                        clean["repo"] = str(src["repo"] or "").strip()[:120]
+                    if "branch" in src:
+                        clean["branch"] = str(src["branch"] or "").strip()[:80]
+                    if src.get("clear_token"):
+                        clean["clear_token"] = True
+                    elif src.get("token"):
+                        clean["token"] = str(src["token"]).strip()[:255]
+                    if clean:
+                        updates["updates"] = clean
                 if "inverter_ip" in d:
                     ip = (d["inverter_ip"] or "").strip()
                     if ip and not valid_ip(ip):

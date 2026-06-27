@@ -198,7 +198,29 @@ def get_settings():
             "password": raw.get("remote_db_password", "") or "",
             "name": raw.get("remote_db_name", "") or "",
         },
+        "updates": {
+            "repo": raw.get("github_repo", "") or "",
+            "branch": raw.get("github_branch", "") or "",
+            "token_set": bool((raw.get("github_token") or "").strip()),
+        },
         "tiles": tiles,
+    }
+
+
+def get_update_source():
+    """Raw update source for the backend (includes the token). Never sent to UI."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT setting_key, setting_value FROM app_settings "
+                        "WHERE setting_key IN ('github_repo','github_branch','github_token')")
+            raw = {row["setting_key"]: row["setting_value"] for row in cur.fetchall()}
+    finally:
+        conn.close()
+    return {
+        "repo": (raw.get("github_repo") or "").strip(),
+        "branch": (raw.get("github_branch") or "").strip(),
+        "token": (raw.get("github_token") or "").strip(),
     }
 
 
@@ -228,6 +250,17 @@ def update_settings(updates):
         for field, column in column_map.items():
             if field in remote:
                 scalar[column] = str(remote[field])
+    if isinstance(updates.get("updates"), dict):
+        up = updates["updates"]
+        if "repo" in up:
+            scalar["github_repo"] = str(up["repo"] or "").strip()[:120]
+        if "branch" in up:
+            scalar["github_branch"] = str(up["branch"] or "").strip()[:80]
+        # Token: only write when a value is supplied; "" with clear_token clears it.
+        if up.get("clear_token"):
+            scalar["github_token"] = ""
+        elif up.get("token"):
+            scalar["github_token"] = str(up["token"]).strip()[:255]
 
     tiles = updates.get("tiles") if isinstance(updates.get("tiles"), dict) else None
 
