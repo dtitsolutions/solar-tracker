@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply Solar Monitor update (git pull + docker build + restart)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust SM_APP_DIR if you deployed somewhere other than /opt/solar-tracker.
+Environment=SM_APP_DIR=/opt/solar-tracker
+Environment=SM_GITHUB_BRANCH=main
+ExecStart=/opt/solar-tracker/scripts/update.sh

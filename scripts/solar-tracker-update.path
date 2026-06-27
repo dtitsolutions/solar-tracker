@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for Solar Monitor update requests
+
+[Path]
+# The app writes this file when an admin clicks "Update now".
+PathExists=/opt/solar-tracker/.update/request
+Unit=solar-tracker-update.service
+
+[Install]
+WantedBy=multi-user.target
