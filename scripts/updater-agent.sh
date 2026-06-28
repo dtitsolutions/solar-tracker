@@ -31,7 +31,12 @@ run_update() {
   if git fetch --all --prune >>"$LOG" 2>&1 && git reset --hard "origin/$BRANCH" >>"$LOG" 2>&1; then
     SHA="$(git rev-parse HEAD)"; log "Downloaded $SHA"
   else
-    mark "@FAIL download"; log "ERROR: download failed (check git credentials for a private repo)"; return 1
+    mark "@FAIL download"
+    log "ERROR: could not download the update."
+    log "If this is a PRIVATE repo, the host needs git credentials. On the server, run:"
+    log "  git -C $DIR remote set-url origin https://USER:TOKEN@github.com/OWNER/REPO.git"
+    log "(replace USER/TOKEN/OWNER/REPO), then click Update now again."
+    return 1
   fi
 
   mark "@PHASE installing"
