@@ -12,6 +12,7 @@ LOG="$UPDATE_DIR/update.log"
 
 mkdir -p "$UPDATE_DIR"
 exec >>"$LOG" 2>&1
+trap 'rc=$?; if [ "$rc" -eq 0 ]; then echo "=== update finished $(date -Is) (exit 0) ==="; else echo "=== update FAILED $(date -Is) (exit $rc) ==="; fi' EXIT
 echo "=== update started $(date -Is) ==="
 
 cd "$APP_DIR"
@@ -31,4 +32,4 @@ GIT_SHA="$SHA" $COMPOSE up -d
 # Record what is now deployed (read back by the app) and clear the trigger.
 echo "$SHA" > "$UPDATE_DIR/DEPLOYED_SHA"
 rm -f "$UPDATE_DIR/request"
-echo "=== update finished $(date -Is) -> ${SHA} ==="
+echo "deployed ${SHA}"

@@ -42,6 +42,7 @@ _UPDATE = {
     "branch": os.environ.get("SM_GITHUB_BRANCH", "main"),
     "trigger": os.environ.get("SM_UPDATE_TRIGGER", "/app/.update/request"),
     "version_file": os.environ.get("SM_VERSION_FILE", "/app/.update/DEPLOYED_SHA"),
+    "log": os.environ.get("SM_UPDATE_LOG", "/app/.update/update.log"),
 }
 
 def _update_source():
@@ -147,7 +148,32 @@ def request_update():
         raise RuntimeError("the update directory %s is not writable by the app" % d)
     with open(trig, "w", encoding="utf-8") as f:
         f.write("update requested at %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    # Start a fresh log so the viewer shows this run only; the host updater appends.
+    try:
+        with open(_UPDATE["log"], "w", encoding="utf-8") as f:
+            f.write("=== update requested %s — waiting for host updater… ===\n"
+                    % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    except Exception:
+        pass
     return {"trigger": trig}
+
+
+def read_update_log(max_bytes=200000):
+    """Return the host updater's log (from the bind-mounted .update dir) plus a
+    'done' flag so the live viewer knows when to stop polling."""
+    path = _UPDATE["log"]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {"ok": True, "log": "", "done": False, "exists": False}
+    except Exception as e:                               # noqa: BLE001
+        return {"ok": False, "log": "", "done": False, "error": str(e)}
+    if len(text) > max_bytes:
+        text = "…(truncated)…\n" + text[-max_bytes:]
+    tail = text.rstrip().rsplit("\n", 1)[-1] if text.strip() else ""
+    done = "update finished" in tail.lower() or "update failed" in tail.lower()
+    return {"ok": True, "log": text, "done": done, "exists": True}
 # -------------------------------------------------------------------------
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1152,6 +1178,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(403, {"ok": False, "error": "admin only"})
                 return
             self._json(200, update_version())
+        elif path == "/api/update/logs":
+            if not config_store.is_admin(self._user()):
+                self._json(403, {"ok": False, "error": "admin only"})
+                return
+            self._json(200, read_update_log())
         else:
             self._send(404, "text/plain; charset=utf-8", b"not found")
 

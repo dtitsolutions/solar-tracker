@@ -164,8 +164,6 @@
   .upd-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   .upd-info{min-width:0}
   .upd-title{font-weight:700;color:var(--ink);font-size:.92rem}
-  .upd-sub{color:var(--muted);font-size:.78rem;margin-top:2px}
-  .upd-sub code{background:var(--bg1);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:.74rem}
   .upd-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
     margin-top:12px;padding:11px 13px;background:var(--bg1);border:1px solid var(--grid);border-radius:10px}
   .upd-banner-txt{min-width:0}.upd-banner-txt strong{color:var(--grid)}
@@ -175,6 +173,10 @@
     background:var(--bg1);border:1px solid var(--line);color:var(--muted)}
   .upd-status.ok{border-color:var(--batt);color:var(--ink)}
   .upd-status.err{border-color:var(--warn);color:var(--ink)}
+  .upd-logwrap{margin-top:10px}
+  .upd-log{margin-top:8px;max-height:300px;overflow:auto;background:#0b0f14;color:#cfe3f5;
+    border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:var(--mono);
+    font-size:.74rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   body.role-user #usub-add{display:none}
   .cookie-bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;
     display:flex;align-items:center;gap:12px;max-width:560px;width:calc(100% - 28px);
@@ -504,7 +506,6 @@
         <div class="upd-row">
           <div class="upd-info">
             <div class="upd-title">Software updates</div>
-            <div class="upd-sub">Repo <code id="upd-repo">dtitsolutions/solar-tracker</code> · deployed <code id="upd-deployed">unknown</code></div>
           </div>
           <button type="button" class="connect-btn" id="btn-check-update">Check for updates</button>
         </div>
@@ -516,6 +517,10 @@
           <button type="button" class="connect-btn" id="btn-apply-update">Update now</button>
         </div>
         <div class="upd-status" id="upd-status" hidden></div>
+        <div class="upd-logwrap" id="upd-logwrap" hidden>
+          <button type="button" class="linkbtn" id="btn-upd-logs">Show logs</button>
+          <pre class="upd-log" id="upd-log" hidden></pre>
+        </div>
       </div>
     </details>
 
@@ -1350,12 +1355,42 @@ function showPage(pageId){
     setStatus("Requesting update…","");
     fetch("/api/update/apply",{method:"POST"}).then(r=>r.json()).then(d=>{
       if(d&&d.ok){ setStatus(d.message||"Update requested.","ok");
-        if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true; }
+        if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true;
+        revealLogs(true); openLogs(); }      // auto-show the live log when an update starts
       else setStatus((d&&d.error)||"Update request failed.","err");
     }).catch(()=>setStatus("Could not reach the server.","err"));
   }
+
+  // ---- live update log ----
+  let logTimer=null, logOpen=false;
+  function revealLogs(show){ const w=g("upd-logwrap"); if(w) w.hidden=!show; }
+  function poll(){
+    fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{
+      const pre=g("upd-log"); if(!pre) return;
+      if(d && d.ok){
+        pre.textContent = d.log || "Waiting for the host updater to start…";
+        const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+        if(atBottom) pre.scrollTop = pre.scrollHeight;
+        if(d.done){ stopPoll(); const b=g("btn-upd-logs"); if(b) b.textContent="Hide logs"; return; }
+      }
+      // keep polling — and keep trying across the restart, when the server is briefly down
+    }).catch(()=>{ /* server restarting mid-update; keep polling */ });
+  }
+  function startPoll(){ if(logTimer) return; poll(); logTimer=setInterval(poll,1500); }
+  function stopPoll(){ if(logTimer){ clearInterval(logTimer); logTimer=null; } }
+  function openLogs(){
+    logOpen=true; const pre=g("upd-log"), b=g("btn-upd-logs");
+    if(pre) pre.hidden=false; if(b) b.textContent="Hide logs";
+    revealLogs(true); startPoll();
+  }
+  function closeLogs(){
+    logOpen=false; const pre=g("upd-log"), b=g("btn-upd-logs");
+    if(pre) pre.hidden=true; if(b) b.textContent="Show logs"; stopPoll();
+  }
+
   const cb=g("btn-check-update"); if(cb) cb.addEventListener("click",()=>check(true));
   const ab=g("btn-apply-update"); if(ab) ab.addEventListener("click",apply);
+  const lb=g("btn-upd-logs"); if(lb) lb.addEventListener("click",()=>{ logOpen?closeLogs():openLogs(); });
   const gb=g("btn-upd-goto"); if(gb) gb.addEventListener("click",()=>{
     if(typeof showPage==="function") showPage("settings");
     const grp=g("grp-updates"); if(grp) grp.open=true;
@@ -1364,7 +1399,14 @@ function showPage(pageId){
   // auto-check once on load, admins only (wait until ME role is known)
   let tries=0;
   const t=setInterval(()=>{
-    if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t); if(ME.role==="admin") check(false); }
+    if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t);
+      if(ME.role==="admin"){ check(false);
+        // if an update is in progress / recently ran, surface the log button
+        fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{
+          if(d && d.ok && d.exists && (d.log||"").trim()){ revealLogs(true); if(!d.done) openLogs(); }
+        }).catch(()=>{});
+      }
+    }
     else if(++tries>40) clearInterval(t);
   },150);
 })();
