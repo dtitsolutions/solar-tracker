@@ -1304,8 +1304,14 @@ function showPage(pageId){
     const s=g("upd-status"); if(!s) return;
     s.textContent=msg||""; s.className="upd-status"+(cls?(" "+cls):""); s.hidden=!msg;
   }
+  let chkSeq=0;
+  function hideBanner(){ if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true; }
   function render(d){
-    if(!d || d.ok===false){ setStatus((d&&d.error)||"Could not check for updates.","err"); return; }
+    if(!d || d.ok===false){
+      hideBanner();                            // never leave a stale "available" on error
+      setStatus((d&&d.error)||"Could not check for updates.","err");
+      return;
+    }
     if(g("upd-repo")) g("upd-repo").textContent=(d.repo||"")+"@"+(d.branch||"main");
     if(g("upd-deployed")) g("upd-deployed").textContent=d.deployed_known?(d.deployed_short||d.deployed):"unknown";
     const avail=!!d.update_available;
@@ -1319,7 +1325,7 @@ function showPage(pageId){
     else if(!avail && !d.deployed_known) setStatus("Deployed version unknown — latest on GitHub is "+(d.latest_short||"?")+".","");
     else setStatus("");
   }
-  function browserCheck(){
+  function browserCheck(seq){
     // Fallback: compare in the browser. Works when this device has internet but
     // the server doesn't (public repo). Private repos still need the server token.
     return fetch("/api/update/version").then(r=>r.json()).then(v=>{
@@ -1329,11 +1335,12 @@ function showPage(pageId){
                    {headers:{"Accept":"application/vnd.github+json"}})
         .then(r=>{ if(!r.ok) throw r.status; return r.json(); })
         .then(c=>{
+          if(seq!==chkSeq) return;            // a newer check superseded this one
           const latest=(c.sha||"").slice(0,40);
           const msg=((c.commit&&c.commit.message)||"").split("\n")[0].slice(0,200);
           const date=(c.commit&&c.commit.author&&c.commit.author.date)||"";
           const dep=v.deployed||"", known=!!v.deployed_known;
-          const same=!!latest&&known&&(latest.indexOf(dep)===0||dep.indexOf(latest)===0);
+          const same=!!latest&&known&&(latest.toLowerCase().indexOf(dep.toLowerCase())===0||dep.toLowerCase().indexOf(latest.toLowerCase())===0);
           render({ok:true,repo:repo,branch:branch,deployed:dep,deployed_short:dep.slice(0,7),
                   deployed_known:known,latest:latest,latest_short:latest.slice(0,7),
                   message:msg,date:date,update_available:!!latest&&known&&!same});
@@ -1341,15 +1348,19 @@ function showPage(pageId){
     });
   }
   function check(manual){
+    const seq=++chkSeq;                        // only the newest check may update the UI
     if(manual) setStatus("Checking for updates…","");
+    hideBanner();                              // clear any stale banner while we re-check
     fetch("/api/update/check").then(r=>r.ok?r.json():null).then(d=>{
+      if(seq!==chkSeq) return;
       if(d && d.ok){ render(d); return; }
-      return browserCheck().catch(()=>{
+      return browserCheck(seq).catch(()=>{
+        if(seq!==chkSeq) return;
         if(d) render(d);                       // surface the server's hint (e.g. private repo)
         else if(manual) setStatus("Could not check for updates.","err");
       });
     }).catch(()=>{
-      browserCheck().catch(()=>{ if(manual) setStatus("Could not reach the server.","err"); });
+      browserCheck(seq).catch(()=>{ if(seq===chkSeq && manual) setStatus("Could not reach the server.","err"); });
     });
   }
   function apply(){
