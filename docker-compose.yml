@@ -165,7 +165,9 @@ services:
     restart: unless-stopped
     environment:
       SM_APP_DIR: ${SM_APP_DIR:-/opt/solar-tracker}
+      SM_GITHUB_REPO: ${SM_GITHUB_REPO:-dtitsolutions/solar-tracker}
       SM_GITHUB_BRANCH: ${SM_GITHUB_BRANCH:-main}
+      SM_GITHUB_TOKEN: ${SM_GITHUB_TOKEN:-}       # used to pull a private repo — no host git setup needed
     working_dir: ${SM_APP_DIR:-/opt/solar-tracker}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
