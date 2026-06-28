@@ -178,6 +178,10 @@
     transition:width .35s ease}
   .upd-prog.is-done .upd-prog-fill{background:var(--batt)}
   .upd-prog.is-fail .upd-prog-fill{background:var(--warn)}
+  .upd-logwrap #btn-upd-logs{margin-top:10px}
+  .upd-log{margin-top:8px;max-height:280px;overflow:auto;background:#0b0f14;color:#cfe3f5;
+    border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:var(--mono);
+    font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   body.role-user #usub-add{display:none}
   .cookie-bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;
     display:flex;align-items:center;gap:12px;max-width:560px;width:calc(100% - 28px);
@@ -514,14 +518,15 @@
         </div>
         <div class="upd-status" id="upd-status" hidden></div>
         <div class="upd-logwrap" id="upd-logwrap" hidden>
-          <button type="button" class="linkbtn" id="btn-upd-logs">Show progress</button>
-          <div class="upd-prog" id="upd-prog" hidden>
+          <div class="upd-prog" id="upd-prog">
             <div class="upd-prog-head">
               <span class="upd-prog-label" id="upd-prog-label">Preparing…</span>
               <span class="upd-prog-pct" id="upd-prog-pct">0%</span>
             </div>
             <div class="upd-prog-track"><div class="upd-prog-fill" id="upd-prog-fill"></div></div>
           </div>
+          <button type="button" class="linkbtn" id="btn-upd-logs">Show logs</button>
+          <pre class="upd-log" id="upd-log" hidden></pre>
         </div>
       </div>
     </details>
@@ -1363,22 +1368,13 @@ function showPage(pageId){
       browserCheck(seq).catch(()=>{ if(seq===chkSeq && manual) setStatus("Could not reach the server.","err"); });
     });
   }
-  function apply(){
-    if(!confirm("Download the latest version, rebuild and restart now?\nThe dashboard may briefly disconnect while it updates.")) return;
-    setStatus("Starting update…","");
-    fetch("/api/update/apply",{method:"POST"}).then(r=>r.json()).then(d=>{
-      if(d&&d.ok){ setStatus("","");
-        if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true;
-        openProg(); }                          // auto-show the progress bar
-      else setStatus((d&&d.error)||"Update request failed.","err");
-    }).catch(()=>setStatus("Could not reach the server.","err"));
-  }
-
-  // ---- friendly update progress (no raw docker logs) ----
+  // ---- update progress + optional logs ----
   const PH={preparing:"Preparing…",downloading:"Downloading updates",
             installing:"Installing updates",restarting:"Restarting application",
             done:"Update complete",failed:"Update failed"};
-  let pollT=null, animT=null, progOpen=false, curPhase="", pct=0, finishing=false;
+  const ACTIVE={downloading:1,installing:1,restarting:1};
+  let pollT=null, animT=null, progOpen=false, logOpen=false,
+      curPhase="", pct=0, finishing=false, prepTicks=0, warned=false;
   function revealLogs(show){ const w=g("upd-logwrap"); if(w) w.hidden=!show; }
   function paint(){
     const L=g("upd-prog-label"),F=g("upd-prog-fill"),P=g("upd-prog-pct"),box=g("upd-prog");
@@ -1387,17 +1383,33 @@ function showPage(pageId){
     if(P) P.textContent=Math.round(pct)+"%";
     if(box){ box.classList.toggle("is-done",curPhase==="done"); box.classList.toggle("is-fail",curPhase==="failed"); }
   }
-  function tick(){            // creep the bar forward within the active phase
+  function tick(){
     if(curPhase==="done"){ pct=100; }
     else if(curPhase==="failed"){ pct=Math.max(pct,100); }
-    else { pct=Math.min(94, pct + (2+Math.random()*5)); }
+    else if(ACTIVE[curPhase]){ pct=Math.min(94, pct + (2+Math.random()*5)); }  // real step running
+    else {                                                                     // preparing: don't fake it
+      pct=4; prepTicks++;
+      if(prepTicks===26 && !warned){ warned=true;
+        setStatus("The updater service isn't responding. Make sure it's running:  docker compose up -d updater","err");
+        showLogText(true);
+      }
+    }
     paint();
   }
+  function setLogText(txt){
+    const pre=g("upd-log"); if(!pre) return;
+    const atBottom=pre.scrollHeight-pre.scrollTop-pre.clientHeight<40;
+    pre.textContent = txt || "(no output yet)";
+    if(atBottom) pre.scrollTop=pre.scrollHeight;
+  }
   function applyStatus(s){
+    if(typeof s.log==="string") setLogText(s.log);
     let phase = s.done ? (s.success?"done":"failed") : (s.phase||"preparing");
     if(phase!==curPhase){
-      if(curPhase && curPhase!=="preparing" && phase!=="failed"){ pct=100; paint(); } // finish prior bar
-      curPhase=phase; pct=(phase==="done"||phase==="failed")?100:0; paint();
+      if(curPhase && ACTIVE[curPhase] && phase!=="failed"){ pct=100; paint(); }   // finish prior bar
+      curPhase=phase; prepTicks=0; warned=false;
+      pct=(phase==="done"||phase==="failed")?100:(ACTIVE[phase]?0:4);
+      paint();
       if(phase==="done") finish(true);
       else if(phase==="failed") finish(false);
     }
@@ -1407,12 +1419,13 @@ function showPage(pageId){
     stopPoll(); stopAnim(); pct=100; paint();
     if(ok){
       setStatus("Update complete.","ok");
-      setTimeout(()=>{                          // clear the logs and tidy up
+      setTimeout(()=>{                          // clear the log and tidy up
         fetch("/api/update/logs/clear",{method:"POST"}).catch(()=>{});
-        closeProg(); revealLogs(false); curPhase=""; pct=0; finishing=false;
-      },3000);
+        closeProg(); curPhase=""; pct=0; finishing=false;
+      },4000);
     } else {
-      setStatus("Update failed. The previous version is still running.","err");
+      setStatus("Update failed — the previous version is still running. See the log below.","err");
+      showLogText(true);                        // reveal the real error
     }
   }
   function poll(){
@@ -1422,19 +1435,32 @@ function showPage(pageId){
   function startPoll(){ if(!pollT){ poll(); pollT=setInterval(poll,1000); } if(!animT){ animT=setInterval(tick,350); } }
   function stopPoll(){ if(pollT){ clearInterval(pollT); pollT=null; } }
   function stopAnim(){ if(animT){ clearInterval(animT); animT=null; } }
+  function showLogText(show){
+    logOpen=show; const pre=g("upd-log"), b=g("btn-upd-logs");
+    if(pre) pre.hidden=!show; if(b) b.textContent=show?"Hide logs":"Show logs";
+  }
   function openProg(){
-    progOpen=true; finishing=false; const p=g("upd-prog"), b=g("btn-upd-logs");
-    if(p) p.hidden=false; if(b) b.textContent="Hide progress";
-    revealLogs(true); if(!curPhase){ curPhase="preparing"; pct=0; } paint(); startPoll();
+    progOpen=true; finishing=false; warned=false;
+    revealLogs(true); if(!curPhase){ curPhase="preparing"; pct=4; prepTicks=0; } paint(); startPoll();
   }
   function closeProg(){
-    progOpen=false; const p=g("upd-prog"), b=g("btn-upd-logs");
-    if(p) p.hidden=true; if(b) b.textContent="Show progress"; stopPoll(); stopAnim();
+    progOpen=false; revealLogs(false); showLogText(false); stopPoll(); stopAnim();
+  }
+
+  function apply(){
+    if(!confirm("Download the latest version, rebuild and restart now?\nThe dashboard may briefly disconnect while it updates.")) return;
+    setStatus("Starting update…","");
+    fetch("/api/update/apply",{method:"POST"}).then(r=>r.json()).then(d=>{
+      if(d&&d.ok){ setStatus("","");
+        if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true;
+        curPhase=""; pct=0; openProg(); }
+      else setStatus((d&&d.error)||"Update request failed.","err");
+    }).catch(()=>setStatus("Could not reach the server.","err"));
   }
 
   const cb=g("btn-check-update"); if(cb) cb.addEventListener("click",()=>check(true));
   const ab=g("btn-apply-update"); if(ab) ab.addEventListener("click",apply);
-  const lb=g("btn-upd-logs"); if(lb) lb.addEventListener("click",()=>{ progOpen?closeProg():openProg(); });
+  const lb=g("btn-upd-logs"); if(lb) lb.addEventListener("click",()=>showLogText(!logOpen));
   const gb=g("btn-upd-goto"); if(gb) gb.addEventListener("click",()=>{
     if(typeof showPage==="function") showPage("settings");
     const grp=g("grp-updates"); if(grp) grp.open=true;
@@ -1445,9 +1471,9 @@ function showPage(pageId){
   const t=setInterval(()=>{
     if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t);
       if(ME.role==="admin"){ check(false);
-        // if an update is mid-flight, surface the progress bar
+        // if an update is mid-flight or recently failed, surface the progress + logs
         fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{
-          if(d && d.ok && d.exists && !d.done){ openProg(); }
+          if(d && d.ok && d.exists && !(d.done && d.success)){ openProg(); }
         }).catch(()=>{});
       }
     }

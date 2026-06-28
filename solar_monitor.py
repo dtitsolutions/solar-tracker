@@ -150,45 +150,51 @@ def request_update():
         raise RuntimeError("the update directory %s is not writable by the app" % d)
     with open(trig, "w", encoding="utf-8") as f:
         f.write("update requested at %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-    # Start fresh logs so the progress view shows this run only.
+    # Start a fresh log so the progress view + Show logs reflect this run only.
     try:
         with open(_UPDATE["log"], "w", encoding="utf-8") as f:
-            f.write("update requested %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-        if _UPDATE.get("verbose"):
-            open(_UPDATE["verbose"], "w", encoding="utf-8").close()
+            f.write(time.strftime("%H:%M:%S") +
+                    "  Update requested. Waiting for the updater service to pick it up…\n")
     except Exception:
         pass
     return {"trigger": trig}
 
 
 def read_update_log():
-    """Parse the agent's phase markers into a clean status for the progress UI.
-    Raw git/docker output goes to a separate verbose log we never surface."""
+    """Parse the agent's phase markers for the progress bar AND return the
+    readable log text (marker lines stripped) for the optional 'Show logs' view."""
     path = _UPDATE["log"]
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
     except FileNotFoundError:
-        return {"ok": True, "exists": False, "phase": "idle", "done": False, "success": False}
+        return {"ok": True, "exists": False, "phase": "idle", "done": False,
+                "success": False, "log": ""}
     except Exception as e:                               # noqa: BLE001
         return {"ok": False, "error": str(e)}
     phase, done, success, sha = "preparing", False, False, ""
+    shown = []
     for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("@PHASE "):
-            phase = line.split(" ", 1)[1].strip().lower()
-        elif line.startswith("@DONE"):
+        s = line.strip()
+        if s.startswith("@PHASE "):
+            phase = s.split(" ", 1)[1].strip().lower()
+        elif s.startswith("@DONE"):
             done, success, phase = True, True, "done"
-            parts = line.split(" ", 1)
+            parts = s.split(" ", 1)
             sha = parts[1].strip() if len(parts) > 1 else ""
-        elif line.startswith("@FAIL"):
+        elif s.startswith("@FAIL"):
             done, success, phase = True, False, "failed"
+        else:
+            shown.append(line)
+    log_text = "\n".join(shown).strip()
+    if len(log_text) > 200000:
+        log_text = "…(truncated)…\n" + log_text[-200000:]
     return {"ok": True, "exists": bool(text.strip()), "phase": phase,
-            "done": done, "success": success, "sha": sha}
+            "done": done, "success": success, "sha": sha, "log": log_text}
 
 
 def clear_update_log():
-    """Wipe the update logs once the UI has shown completion."""
+    """Wipe the update log once the UI has shown completion."""
     for p in (_UPDATE.get("log"), _UPDATE.get("verbose")):
         if not p:
             continue
