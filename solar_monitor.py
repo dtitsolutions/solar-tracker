@@ -153,6 +153,8 @@ def request_update():
         with open(_UPDATE["log"], "w", encoding="utf-8") as f:
             f.write("=== update requested %s — waiting for host updater… ===\n"
                     % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+            f.write("(if this line stays for more than a few seconds, the updater "
+                    "isn't running — start it with: docker compose up -d updater)\n")
     except Exception:
         pass
     return {"trigger": trig}

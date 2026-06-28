@@ -155,6 +155,25 @@ services:
     ports:
       - "8080:8080"
 
+  updater:                          # in-stack agent that performs "Update now"
+    # Watches for the trigger the app writes and runs git pull + rebuild + restart
+    # on the host. This is what makes the button fully automatic — no host setup.
+    # SECURITY: it mounts the Docker socket (full control of the host's Docker).
+    # That is the price of letting the app rebuild itself; fine on a private LAN.
+    image: docker:27-cli
+    container_name: solar-monitor-updater
+    restart: unless-stopped
+    environment:
+      SM_APP_DIR: ${SM_APP_DIR:-/opt/solar-tracker}
+      SM_GITHUB_BRANCH: ${SM_GITHUB_BRANCH:-main}
+    working_dir: ${SM_APP_DIR:-/opt/solar-tracker}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Host project dir mounted at the SAME path so compose's relative paths
+      # resolve correctly on the host daemon. Set SM_APP_DIR to your deploy path.
+      - ${SM_APP_DIR:-/opt/solar-tracker}:${SM_APP_DIR:-/opt/solar-tracker}
+    entrypoint: ["/bin/sh","-c","cp \"$${SM_APP_DIR}/scripts/updater-agent.sh\" /tmp/agent.sh && exec sh /tmp/agent.sh"]
+
 volumes:
   config_db_data:
   data_db_data:
