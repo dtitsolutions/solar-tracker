@@ -75,7 +75,7 @@ def _deployed_sha():
 def check_for_update():
     """Ask GitHub for the latest commit on the tracked branch and compare it
     to what is deployed. Requires outbound internet to api.github.com. Supports
-    private repos when a token is set (config DB or SM_GITHUB_TOKEN)."""
+    private repos when SM_GITHUB_TOKEN is set in the environment (.env)."""
     repo, branch, token = _update_source()
     deployed = _deployed_sha()
     known = _is_sha(deployed)
@@ -93,8 +93,8 @@ def check_for_update():
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403, 404):
-            hint = ("repository is private or not found — add a token under "
-                    "Settings -> Updates (or set SM_GITHUB_TOKEN)"
+            hint = ("repository is private or not found — set SM_GITHUB_TOKEN "
+                    "(a fine-grained token with read access) in your .env"
                     if not token else
                     "token was rejected (check it has read access to %s)" % repo)
             return {"ok": False, "update_available": False, "deployed": deployed,
