@@ -43,6 +43,7 @@ _UPDATE = {
     "trigger": os.environ.get("SM_UPDATE_TRIGGER", "/app/.update/request"),
     "version_file": os.environ.get("SM_VERSION_FILE", "/app/.update/DEPLOYED_SHA"),
     "log": os.environ.get("SM_UPDATE_LOG", "/app/.update/update.log"),
+    "verbose": os.environ.get("SM_UPDATE_VERBOSE", "/app/.update/update-verbose.log"),
 }
 
 def _update_source():
@@ -62,16 +63,17 @@ def _is_sha(s):
 
 
 def _deployed_sha():
-    """The commit currently running: build-time env first, then a file the
-    host updater writes after each deploy. Empty string if unknown."""
-    sha = (os.environ.get("SM_DEPLOYED_SHA") or "").strip()
-    if sha:
-        return sha
+    """The commit currently running. The updater agent writes this file after
+    every successful update (and build.sh on deploy), so it tracks the running
+    code even when a rebuild didn't pass GIT_SHA. Falls back to the build env."""
     try:
         with open(_UPDATE["version_file"], "r", encoding="utf-8") as f:
-            return f.read().strip()
+            v = f.read().strip()
+        if _is_sha(v):
+            return v
     except Exception:
-        return ""
+        pass
+    return (os.environ.get("SM_DEPLOYED_SHA") or "").strip()
 
 def check_for_update():
     """Ask GitHub for the latest commit on the tracked branch and compare it
@@ -148,34 +150,53 @@ def request_update():
         raise RuntimeError("the update directory %s is not writable by the app" % d)
     with open(trig, "w", encoding="utf-8") as f:
         f.write("update requested at %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-    # Start a fresh log so the viewer shows this run only; the host updater appends.
+    # Start fresh logs so the progress view shows this run only.
     try:
         with open(_UPDATE["log"], "w", encoding="utf-8") as f:
-            f.write("=== update requested %s — waiting for host updater… ===\n"
-                    % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-            f.write("(if this line stays for more than a few seconds, the updater "
-                    "isn't running — start it with: docker compose up -d updater)\n")
+            f.write("update requested %s\n" % time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+        if _UPDATE.get("verbose"):
+            open(_UPDATE["verbose"], "w", encoding="utf-8").close()
     except Exception:
         pass
     return {"trigger": trig}
 
 
-def read_update_log(max_bytes=200000):
-    """Return the host updater's log (from the bind-mounted .update dir) plus a
-    'done' flag so the live viewer knows when to stop polling."""
+def read_update_log():
+    """Parse the agent's phase markers into a clean status for the progress UI.
+    Raw git/docker output goes to a separate verbose log we never surface."""
     path = _UPDATE["log"]
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
     except FileNotFoundError:
-        return {"ok": True, "log": "", "done": False, "exists": False}
+        return {"ok": True, "exists": False, "phase": "idle", "done": False, "success": False}
     except Exception as e:                               # noqa: BLE001
-        return {"ok": False, "log": "", "done": False, "error": str(e)}
-    if len(text) > max_bytes:
-        text = "…(truncated)…\n" + text[-max_bytes:]
-    tail = text.rstrip().rsplit("\n", 1)[-1] if text.strip() else ""
-    done = "update finished" in tail.lower() or "update failed" in tail.lower()
-    return {"ok": True, "log": text, "done": done, "exists": True}
+        return {"ok": False, "error": str(e)}
+    phase, done, success, sha = "preparing", False, False, ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("@PHASE "):
+            phase = line.split(" ", 1)[1].strip().lower()
+        elif line.startswith("@DONE"):
+            done, success, phase = True, True, "done"
+            parts = line.split(" ", 1)
+            sha = parts[1].strip() if len(parts) > 1 else ""
+        elif line.startswith("@FAIL"):
+            done, success, phase = True, False, "failed"
+    return {"ok": True, "exists": bool(text.strip()), "phase": phase,
+            "done": done, "success": success, "sha": sha}
+
+
+def clear_update_log():
+    """Wipe the update logs once the UI has shown completion."""
+    for p in (_UPDATE.get("log"), _UPDATE.get("verbose")):
+        if not p:
+            continue
+        try:
+            open(p, "w", encoding="utf-8").close()
+        except Exception:
+            pass
+    return {"ok": True}
 # -------------------------------------------------------------------------
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1472,6 +1493,11 @@ class Handler(BaseHTTPRequestHandler):
                                  "rebuild and restart — this page may briefly disconnect.", **res})
             except Exception as e:                        # noqa: BLE001
                 self._json(500, {"ok": False, "error": "could not write update trigger: %s" % e})
+        elif path == "/api/update/logs/clear":           # admin: wipe update logs after completion
+            if not config_store.is_admin(self._user()):
+                self._json(403, {"ok": False, "error": "admin only"})
+                return
+            self._json(200, clear_update_log())
         else:
             self._json(404, {"ok": False, "error": "not found"})
 

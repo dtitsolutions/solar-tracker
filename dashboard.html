@@ -169,9 +169,15 @@
   .upd-status.ok{border-color:var(--batt);color:var(--ink)}
   .upd-status.err{border-color:var(--warn);color:var(--ink)}
   .upd-logwrap{margin-top:10px}
-  .upd-log{margin-top:8px;max-height:300px;overflow:auto;background:#0b0f14;color:#cfe3f5;
-    border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:var(--mono);
-    font-size:.74rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .upd-prog{margin-top:10px}
+  .upd-prog-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .upd-prog-label{font-size:.84rem;color:var(--ink);font-weight:600}
+  .upd-prog-pct{font-size:.8rem;color:var(--muted);font-family:var(--mono)}
+  .upd-prog-track{height:9px;border-radius:6px;background:var(--bg1);border:1px solid var(--line);overflow:hidden}
+  .upd-prog-fill{height:100%;width:0;border-radius:6px;background:var(--grid);
+    transition:width .35s ease}
+  .upd-prog.is-done .upd-prog-fill{background:var(--batt)}
+  .upd-prog.is-fail .upd-prog-fill{background:var(--warn)}
   body.role-user #usub-add{display:none}
   .cookie-bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;
     display:flex;align-items:center;gap:12px;max-width:560px;width:calc(100% - 28px);
@@ -508,8 +514,14 @@
         </div>
         <div class="upd-status" id="upd-status" hidden></div>
         <div class="upd-logwrap" id="upd-logwrap" hidden>
-          <button type="button" class="linkbtn" id="btn-upd-logs">Show logs</button>
-          <pre class="upd-log" id="upd-log" hidden></pre>
+          <button type="button" class="linkbtn" id="btn-upd-logs">Show progress</button>
+          <div class="upd-prog" id="upd-prog" hidden>
+            <div class="upd-prog-head">
+              <span class="upd-prog-label" id="upd-prog-label">Preparing…</span>
+              <span class="upd-prog-pct" id="upd-prog-pct">0%</span>
+            </div>
+            <div class="upd-prog-track"><div class="upd-prog-fill" id="upd-prog-fill"></div></div>
+          </div>
         </div>
       </div>
     </details>
@@ -1342,45 +1354,76 @@ function showPage(pageId){
   }
   function apply(){
     if(!confirm("Download the latest version, rebuild and restart now?\nThe dashboard may briefly disconnect while it updates.")) return;
-    setStatus("Requesting update…","");
+    setStatus("Starting update…","");
     fetch("/api/update/apply",{method:"POST"}).then(r=>r.json()).then(d=>{
-      if(d&&d.ok){ setStatus(d.message||"Update requested.","ok");
+      if(d&&d.ok){ setStatus("","");
         if(g("upd-banner")) g("upd-banner").hidden=true; if(g("upd-global")) g("upd-global").hidden=true;
-        revealLogs(true); openLogs(); }      // auto-show the live log when an update starts
+        openProg(); }                          // auto-show the progress bar
       else setStatus((d&&d.error)||"Update request failed.","err");
     }).catch(()=>setStatus("Could not reach the server.","err"));
   }
 
-  // ---- live update log ----
-  let logTimer=null, logOpen=false;
+  // ---- friendly update progress (no raw docker logs) ----
+  const PH={preparing:"Preparing…",downloading:"Downloading updates",
+            installing:"Installing updates",restarting:"Restarting application",
+            done:"Update complete",failed:"Update failed"};
+  let pollT=null, animT=null, progOpen=false, curPhase="", pct=0, finishing=false;
   function revealLogs(show){ const w=g("upd-logwrap"); if(w) w.hidden=!show; }
+  function paint(){
+    const L=g("upd-prog-label"),F=g("upd-prog-fill"),P=g("upd-prog-pct"),box=g("upd-prog");
+    if(L) L.textContent=PH[curPhase]||"Working…";
+    if(F) F.style.width=pct+"%";
+    if(P) P.textContent=Math.round(pct)+"%";
+    if(box){ box.classList.toggle("is-done",curPhase==="done"); box.classList.toggle("is-fail",curPhase==="failed"); }
+  }
+  function tick(){            // creep the bar forward within the active phase
+    if(curPhase==="done"){ pct=100; }
+    else if(curPhase==="failed"){ pct=Math.max(pct,100); }
+    else { pct=Math.min(94, pct + (2+Math.random()*5)); }
+    paint();
+  }
+  function applyStatus(s){
+    let phase = s.done ? (s.success?"done":"failed") : (s.phase||"preparing");
+    if(phase!==curPhase){
+      if(curPhase && curPhase!=="preparing" && phase!=="failed"){ pct=100; paint(); } // finish prior bar
+      curPhase=phase; pct=(phase==="done"||phase==="failed")?100:0; paint();
+      if(phase==="done") finish(true);
+      else if(phase==="failed") finish(false);
+    }
+  }
+  function finish(ok){
+    if(finishing) return; finishing=true;
+    stopPoll(); stopAnim(); pct=100; paint();
+    if(ok){
+      setStatus("Update complete.","ok");
+      setTimeout(()=>{                          // clear the logs and tidy up
+        fetch("/api/update/logs/clear",{method:"POST"}).catch(()=>{});
+        closeProg(); revealLogs(false); curPhase=""; pct=0; finishing=false;
+      },3000);
+    } else {
+      setStatus("Update failed. The previous version is still running.","err");
+    }
+  }
   function poll(){
-    fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{
-      const pre=g("upd-log"); if(!pre) return;
-      if(d && d.ok){
-        pre.textContent = d.log || "Waiting for the host updater to start…";
-        const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
-        if(atBottom) pre.scrollTop = pre.scrollHeight;
-        if(d.done){ stopPoll(); const b=g("btn-upd-logs"); if(b) b.textContent="Hide logs"; return; }
-      }
-      // keep polling — and keep trying across the restart, when the server is briefly down
-    }).catch(()=>{ /* server restarting mid-update; keep polling */ });
+    fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{ if(d&&d.ok) applyStatus(d); })
+      .catch(()=>{ /* app restarting mid-update; keep polling */ });
   }
-  function startPoll(){ if(logTimer) return; poll(); logTimer=setInterval(poll,1500); }
-  function stopPoll(){ if(logTimer){ clearInterval(logTimer); logTimer=null; } }
-  function openLogs(){
-    logOpen=true; const pre=g("upd-log"), b=g("btn-upd-logs");
-    if(pre) pre.hidden=false; if(b) b.textContent="Hide logs";
-    revealLogs(true); startPoll();
+  function startPoll(){ if(!pollT){ poll(); pollT=setInterval(poll,1000); } if(!animT){ animT=setInterval(tick,350); } }
+  function stopPoll(){ if(pollT){ clearInterval(pollT); pollT=null; } }
+  function stopAnim(){ if(animT){ clearInterval(animT); animT=null; } }
+  function openProg(){
+    progOpen=true; finishing=false; const p=g("upd-prog"), b=g("btn-upd-logs");
+    if(p) p.hidden=false; if(b) b.textContent="Hide progress";
+    revealLogs(true); if(!curPhase){ curPhase="preparing"; pct=0; } paint(); startPoll();
   }
-  function closeLogs(){
-    logOpen=false; const pre=g("upd-log"), b=g("btn-upd-logs");
-    if(pre) pre.hidden=true; if(b) b.textContent="Show logs"; stopPoll();
+  function closeProg(){
+    progOpen=false; const p=g("upd-prog"), b=g("btn-upd-logs");
+    if(p) p.hidden=true; if(b) b.textContent="Show progress"; stopPoll(); stopAnim();
   }
 
   const cb=g("btn-check-update"); if(cb) cb.addEventListener("click",()=>check(true));
   const ab=g("btn-apply-update"); if(ab) ab.addEventListener("click",apply);
-  const lb=g("btn-upd-logs"); if(lb) lb.addEventListener("click",()=>{ logOpen?closeLogs():openLogs(); });
+  const lb=g("btn-upd-logs"); if(lb) lb.addEventListener("click",()=>{ progOpen?closeProg():openProg(); });
   const gb=g("btn-upd-goto"); if(gb) gb.addEventListener("click",()=>{
     if(typeof showPage==="function") showPage("settings");
     const grp=g("grp-updates"); if(grp) grp.open=true;
@@ -1391,9 +1434,9 @@ function showPage(pageId){
   const t=setInterval(()=>{
     if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t);
       if(ME.role==="admin"){ check(false);
-        // if an update is in progress / recently ran, surface the log button
+        // if an update is mid-flight, surface the progress bar
         fetch("/api/update/logs").then(r=>r.ok?r.json():null).then(d=>{
-          if(d && d.ok && d.exists && (d.log||"").trim()){ revealLogs(true); if(!d.done) openLogs(); }
+          if(d && d.ok && d.exists && !d.done){ openProg(); }
         }).catch(()=>{});
       }
     }
