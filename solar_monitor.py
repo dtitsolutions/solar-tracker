@@ -45,21 +45,19 @@ _UPDATE = {
 }
 
 def _update_source():
-    """Effective repo/branch/token: settings in the config DB win, else env."""
-    repo = _UPDATE["repo"]
-    branch = _UPDATE["branch"]
+    """Repo/branch/token come from the environment only (developer config:
+    SM_GITHUB_REPO / SM_GITHUB_BRANCH / SM_GITHUB_TOKEN in .env)."""
     token = (os.environ.get("SM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
-    try:
-        db = config_store.get_update_source()
-        if db.get("repo"):
-            repo = db["repo"]
-        if db.get("branch"):
-            branch = db["branch"]
-        if db.get("token"):
-            token = db["token"]
-    except Exception:
-        pass
-    return repo, branch, token
+    return _UPDATE["repo"], _UPDATE["branch"], token
+
+
+def _is_sha(s):
+    """True only for a real git commit hash (hex, 7-40 chars). Guards against
+    placeholder values like 'unknown' being mistaken for a deployed version."""
+    s = (s or "").strip()
+    if not (7 <= len(s) <= 40):
+        return False
+    return all(c in "0123456789abcdefABCDEF" for c in s)
 
 
 def _deployed_sha():
@@ -80,7 +78,7 @@ def check_for_update():
     private repos when a token is set (config DB or SM_GITHUB_TOKEN)."""
     repo, branch, token = _update_source()
     deployed = _deployed_sha()
-    known = bool(deployed)
+    known = _is_sha(deployed)
     url = "https://api.github.com/repos/%s/commits/%s" % (repo, branch)
     headers = {
         "Accept": "application/vnd.github+json",
@@ -108,13 +106,15 @@ def check_for_update():
     commit = data.get("commit", {}) or {}
     msg = (commit.get("message") or "").split("\n")[0][:200]
     date = ((commit.get("author") or {}).get("date")) or ""
-    same = bool(latest) and known and (latest.startswith(deployed) or deployed.startswith(latest))
+    dl, ll = deployed.lower(), latest.lower()
+    same = known and _is_sha(latest) and (ll.startswith(dl) or dl.startswith(ll))
+    available = bool(latest) and known and not same
     return {
         "ok": True, "repo": repo, "branch": branch,
         "deployed": deployed, "deployed_short": deployed[:7], "deployed_known": known,
         "latest": latest, "latest_short": latest[:7],
         "message": msg, "date": date,
-        "update_available": bool(latest) and known and not same,
+        "update_available": available,
         "html_url": data.get("html_url") or ("https://github.com/%s" % repo),
     }
 
@@ -126,7 +126,7 @@ def update_version():
     return {
         "ok": True, "repo": repo, "branch": branch,
         "deployed": deployed, "deployed_short": deployed[:7],
-        "deployed_known": bool(deployed),
+        "deployed_known": _is_sha(deployed),
         "private": bool(token),
     }
 
@@ -1276,19 +1276,6 @@ class Handler(BaseHTTPRequestHandler):
                     updates["timezone"] = new_tz
                 if isinstance(d.get("remote_db"), dict):
                     updates["remote_db"] = d["remote_db"]
-                if isinstance(d.get("updates"), dict):
-                    src = d["updates"]
-                    clean = {}
-                    if "repo" in src:
-                        clean["repo"] = str(src["repo"] or "").strip()[:120]
-                    if "branch" in src:
-                        clean["branch"] = str(src["branch"] or "").strip()[:80]
-                    if src.get("clear_token"):
-                        clean["clear_token"] = True
-                    elif src.get("token"):
-                        clean["token"] = str(src["token"]).strip()[:255]
-                    if clean:
-                        updates["updates"] = clean
                 if "inverter_ip" in d:
                     ip = (d["inverter_ip"] or "").strip()
                     if ip and not valid_ip(ip):

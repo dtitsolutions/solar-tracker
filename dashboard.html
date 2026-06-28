@@ -175,18 +175,6 @@
     background:var(--bg1);border:1px solid var(--line);color:var(--muted)}
   .upd-status.ok{border-color:var(--batt);color:var(--ink)}
   .upd-status.err{border-color:var(--warn);color:var(--ink)}
-  .upd-source{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
-  .upd-src-title{font-weight:700;color:var(--ink);font-size:.85rem;margin-bottom:8px}
-  .upd-src-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .upd-src-grid label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--muted)}
-  .upd-src-grid label:nth-child(3){grid-column:1 / -1}
-  .upd-src-grid input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-    background:var(--bg1);color:var(--ink);font-size:.82rem;font-family:inherit}
-  .upd-src-grid input:focus{outline:none;border-color:var(--grid)}
-  .upd-token-state{color:var(--batt);font-weight:700}
-  .upd-src-actions{display:flex;align-items:center;gap:12px;margin-top:10px}
-  .upd-src-hint{margin-top:8px;font-size:.72rem;color:var(--muted)}
-  @media (max-width:560px){ .upd-src-grid{grid-template-columns:1fr} }
   body.role-user #usub-add{display:none}
   .cookie-bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;
     display:flex;align-items:center;gap:12px;max-width:560px;width:calc(100% - 28px);
@@ -471,7 +459,7 @@
       <button type="button" class="nav-item" data-page="settings" id="nav-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
       <button type="button" class="nav-item logout" id="nav-logout"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17l5-5-5-5M20 12H9M9 4H5v16h4"/></svg>Log out</button>
     </nav>
-    <div class="side-foot">DTIT Solutions @2026 BETA V0.0001R1</div>
+    <div class="side-foot">Solar Monitor v1</div>
   </aside>
   <div class="sidebar-scrim" id="sidebar-scrim"></div>
   <div class="main">
@@ -528,26 +516,6 @@
           <button type="button" class="connect-btn" id="btn-apply-update">Update now</button>
         </div>
         <div class="upd-status" id="upd-status" hidden></div>
-
-        <div class="upd-source">
-          <div class="upd-src-title">Update source</div>
-          <div class="upd-src-grid">
-            <label>Repository
-              <input type="text" id="upd-cfg-repo" placeholder="owner/repo" autocomplete="off" spellcheck="false">
-            </label>
-            <label>Branch
-              <input type="text" id="upd-cfg-branch" placeholder="main" autocomplete="off" spellcheck="false">
-            </label>
-            <label>Access token <span id="upd-token-state" class="upd-token-state"></span>
-              <input type="password" id="upd-cfg-token" placeholder="github_pat_… (private repos only)" autocomplete="off" spellcheck="false">
-            </label>
-          </div>
-          <div class="upd-src-actions">
-            <button type="button" class="connect-btn" id="btn-save-src">Save source</button>
-            <button type="button" class="linkbtn" id="btn-clear-token" hidden>Remove token</button>
-          </div>
-          <div class="upd-src-hint">The token is stored on the server and never shown again. For a private repo, the “Update now” pull also needs git credentials on the host (see docs).</div>
-        </div>
       </div>
     </details>
 
@@ -1393,42 +1361,10 @@ function showPage(pageId){
     const grp=g("grp-updates"); if(grp) grp.open=true;
   });
 
-  // ---- update source (repo / branch / token) stored server-side ----
-  function loadSource(){
-    fetch("/api/settings").then(r=>r.ok?r.json():null).then(s=>{
-      const u=(s&&s.updates)||{};
-      if(g("upd-cfg-repo")) g("upd-cfg-repo").value=u.repo||"";
-      if(g("upd-cfg-branch")) g("upd-cfg-branch").value=u.branch||"";
-      if(g("upd-repo") && u.repo) g("upd-repo").textContent=u.repo;
-      const st=g("upd-token-state"), clr=g("btn-clear-token");
-      if(st) st.textContent=u.token_set?"· configured":"";
-      if(clr) clr.hidden=!u.token_set;
-      if(u.token_set && g("upd-cfg-token")) g("upd-cfg-token").placeholder="•••••• (leave blank to keep)";
-    }).catch(()=>{});
-  }
-  function saveSource(extra){
-    const payload={updates:Object.assign({
-      repo:(g("upd-cfg-repo")||{}).value||"",
-      branch:(g("upd-cfg-branch")||{}).value||"",
-    }, extra||{})};
-    const tok=(g("upd-cfg-token")||{}).value||"";
-    if(tok) payload.updates.token=tok;
-    setStatus("Saving update source…","");
-    fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
-      .then(r=>r.json()).then(d=>{
-        if(d&&d.ok){ setStatus("Update source saved.","ok"); if(g("upd-cfg-token")) g("upd-cfg-token").value=""; loadSource(); }
-        else setStatus((d&&d.error)||"Could not save (admin only).","err");
-      }).catch(()=>setStatus("Could not reach the server.","err"));
-  }
-  const sb=g("btn-save-src"); if(sb) sb.addEventListener("click",()=>saveSource());
-  const ct=g("btn-clear-token"); if(ct) ct.addEventListener("click",()=>{
-    if(confirm("Remove the stored access token?")) saveSource({clear_token:true});
-  });
-
   // auto-check once on load, admins only (wait until ME role is known)
   let tries=0;
   const t=setInterval(()=>{
-    if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t); if(ME.role==="admin"){ loadSource(); check(false); } }
+    if(typeof ME!=="undefined" && ME && ME.role){ clearInterval(t); if(ME.role==="admin") check(false); }
     else if(++tries>40) clearInterval(t);
   },150);
 })();
