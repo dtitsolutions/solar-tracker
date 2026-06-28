@@ -369,13 +369,143 @@ BRAND = "goodwe"
 
 
 async def connect(ip, retries=3):
-    """Connect to a GoodWe inverter and return the live object. The returned
-    object exposes read_runtime_data(), sensors(), model_name, serial_number.
+    """Connect to a GoodWe inverter and return the live object.
 
-    GoodWe's auto-discovery is unreliable on some units (ES hybrids especially),
-    so we try an explicit protocol family before falling back to discovery and
-    then to a sweep of the known families. Set SM_GOODWE_FAMILY (e.g. "ES" for a
-    GW####ES) to skip straight to the right one."""
+    Transport is auto-detected: a quick Modbus-TCP :502 probe first (newer
+    dongles, the kind SEMS+ talks to — fast TCP refusal if absent), then the
+    classic UDP :8899 protocol. Force one with SM_GOODWE_TRANSPORT=modbus|udp."""
+    transport = (os.environ.get("SM_GOODWE_TRANSPORT") or "auto").strip().lower()
+    if transport == "udp":
+        return await _connect_udp(ip, retries)
+    if transport == "modbus":
+        inv = await _connect_modbus_tcp(ip)
+        if inv is not None:
+            return inv
+        raise ConnectionError("Modbus TCP :%d did not respond at %s" % (_MB_PORT, ip))
+    # auto
+    try:
+        inv = await _connect_modbus_tcp(ip)
+        if inv is not None:
+            return inv
+    except Exception:                                     # noqa: BLE001
+        pass
+    return await _connect_udp(ip, retries)
+
+
+# --------------------------------------------------------------------------- #
+#  Modbus-TCP path (newer GoodWe dongles, port 502)
+# --------------------------------------------------------------------------- #
+_MB_PORT = int(os.environ.get("SM_GOODWE_MODBUS_PORT", "502") or 502)
+_MB_UNIT = int(os.environ.get("SM_GOODWE_MODBUS_UNIT", "247") or 247)   # 0xF7
+
+
+def _mb_read(ip, port, unit, start, qty, timeout=3):
+    """One Modbus-TCP read (function 3). Returns the data bytes or None."""
+    import socket
+    import struct
+    pdu = struct.pack(">BHH", 0x03, start, qty)
+    adu = struct.pack(">HHHB", 1, 0, len(pdu) + 1, unit) + pdu
+    s = socket.create_connection((ip, port), timeout=timeout)
+    try:
+        s.sendall(adu)
+        buf = b""
+        while len(buf) < 7:
+            chunk = s.recv(1024)
+            if not chunk:
+                break
+            buf += chunk
+        if len(buf) < 7:
+            return None
+        total = 6 + struct.unpack(">H", buf[4:6])[0]
+        while len(buf) < total:
+            chunk = s.recv(1024)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        s.close()
+    if len(buf) < 9 or (buf[7] & 0x80):
+        return None
+    n = buf[8]
+    return buf[9:9 + n]
+
+
+def _u16(b, o): return int.from_bytes(b[o:o + 2], "big") if len(b) >= o + 2 else 0
+def _s16(b, o): return int.from_bytes(b[o:o + 2], "big", signed=True) if len(b) >= o + 2 else 0
+def _u32(b, o): return int.from_bytes(b[o:o + 4], "big") if len(b) >= o + 4 else 0
+def _s32(b, o): return int.from_bytes(b[o:o + 4], "big", signed=True) if len(b) >= o + 4 else 0
+def _ascii(b, o, n): return b[o:o + n].decode("ascii", "replace").replace("\x00", "").strip() if len(b) >= o + n else ""
+
+
+def _mb_runtime(ip, port, unit):
+    """Read GoodWe ET-family runtime registers over Modbus TCP and normalize to
+    the project's data keys. PV power and SoC are high-confidence; grid/battery
+    are best-effort ET offsets (verify against SEMS+ with `cli.py tcp --debug`)."""
+    blk = _mb_read(ip, port, unit, 0x891C, 0x7D, timeout=3)   # running data (250 bytes)
+    data = {}
+    if blk:
+        ppv1 = _u32(blk, 10)
+        ppv2 = _u32(blk, 18)
+        data["ppv"] = ppv1 + ppv2
+        # best-effort ET offsets — confirm with --debug + SEMS+:
+        data["active_power"] = _s32(blk, 80)             # grid power (+import / -export)
+        try:
+            data["temperature"] = _s16(blk, 96) / 10.0
+        except Exception:                                # noqa: BLE001
+            pass
+        vbat = _u16(blk, 160) / 10.0
+        ibat = _s16(blk, 162) / 10.0
+        data["pbattery1"] = round(vbat * ibat)           # + charge / - discharge (verify)
+    soc = _mb_read(ip, port, unit, 0x908F, 1, timeout=3)     # battery SoC (37007)
+    if soc:
+        data["battery_soc"] = _u16(soc, 0)
+    # House load via the energy balance (avoids an uncertain register):
+    if "ppv" in data and "active_power" in data:
+        data["house_consumption"] = max(
+            0, data["ppv"] + data["active_power"] - data.get("pbattery1", 0))
+    return data
+
+
+class _ModbusInverter:
+    """Adapts the Modbus-TCP reader to the same interface the worker expects."""
+    def __init__(self, ip, port, unit, model, serial):
+        self.ip = ip
+        self.port = port
+        self.unit = unit
+        self.model_name = model or "GoodWe (Modbus TCP)"
+        self.serial_number = serial or ""
+
+    def sensors(self):
+        return [_FakeSensor(sid, label.strip(" -"), "W") for sid, label in SUMMARY]
+
+    async def read_runtime_data(self):
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _mb_runtime, self.ip, self.port, self.unit)
+
+
+async def _connect_modbus_tcp(ip):
+    """Probe Modbus TCP :502 and, if it answers, return a Modbus inverter object.
+    Confirms the link by decoding the device-info block (model + serial)."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _probe():
+        di = _mb_read(ip, _MB_PORT, _MB_UNIT, 0x88B8, 0x21, timeout=3)   # device info
+        if not di:
+            return None
+        serial = _ascii(di, 6, 16)
+        model = _ascii(di, 22, 10)
+        return _ModbusInverter(ip, _MB_PORT, _MB_UNIT, model, serial)
+
+    try:
+        inv = await loop.run_in_executor(None, _probe)
+    except Exception:                                    # noqa: BLE001
+        return None
+    return inv
+
+
+async def _connect_udp(ip, retries=3):
     import goodwe
     try:
         timeout = float(os.environ.get("SM_GOODWE_TIMEOUT", "2") or 2)
