@@ -219,7 +219,8 @@ SUMMARY_IDS = [sid for sid, _ in SUMMARY]
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
 PAGE = b"<h1>dashboard.html not loaded</h1>"
 
-# In-memory login sessions: token -> {"user", "exp"}. Cleared on restart.
+# Login sessions: cached in-memory and persisted in Redis so they survive an
+# app restart (e.g. during a self-update) without logging anyone out.
 SESSIONS = {}
 SESSION_TTL = 7 * 24 * 3600
 
@@ -515,20 +516,51 @@ def check_login(user, pw):
     return config_store.check_login(user, pw)
 
 
+def _sess_key(t):
+    return "sm:session:" + t
+
+
 def new_session(user):
     t = secrets.token_urlsafe(32)
     SESSIONS[t] = {"user": user, "exp": time.time() + SESSION_TTL}
+    r = _redis()                                  # persist so it survives an app restart (e.g. an update)
+    if r is not None:
+        try:
+            r.setex(_sess_key(t), SESSION_TTL, user)
+        except Exception:                         # noqa: BLE001
+            pass
     return t
 
 
 def session_user(token):
+    if not token:
+        return None
     s = SESSIONS.get(token)
-    if not s:
-        return None
-    if time.time() > s["exp"]:
+    if s and time.time() <= s["exp"]:
+        return s["user"]
+    if s:
         SESSIONS.pop(token, None)
-        return None
-    return s["user"]
+    r = _redis()                                  # fall back to Redis (the in-memory cache is empty after a restart)
+    if r is not None:
+        try:
+            v = r.get(_sess_key(token))
+            if v:
+                user = v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
+                SESSIONS[token] = {"user": user, "exp": time.time() + SESSION_TTL}
+                return user
+        except Exception:                         # noqa: BLE001
+            pass
+    return None
+
+
+def drop_session(token):
+    SESSIONS.pop(token, None)
+    r = _redis()
+    if r is not None:
+        try:
+            r.delete(_sess_key(token))
+        except Exception:                         # noqa: BLE001
+            pass
 
 
 def session_valid(token):
@@ -1235,7 +1267,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/logout":
             logsetup.action(f"{self._user()} logged out")
-            SESSIONS.pop(cookie_token(self), None)
+            drop_session(cookie_token(self))
             self._json(200, {"ok": True}, cookies=[
                 "sm_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"])
         elif path == "/api/profile":

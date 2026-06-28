@@ -186,6 +186,8 @@
   .upd-log{margin-top:8px;max-height:280px;overflow:auto;background:#0b0f14;color:#cfe3f5;
     border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:var(--mono);
     font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  /* Raw update logs are a developer aid — only in debug mode. */
+  body:not(.debug-on) #btn-upd-logs, body:not(.debug-on) #upd-log{display:none!important}
   body.role-user #usub-add{display:none}
   .cookie-bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;
     display:flex;align-items:center;gap:12px;max-width:560px;width:calc(100% - 28px);
@@ -1239,6 +1241,7 @@ function applySettings(cfg){
   setIf("log-input",cfg.log_interval_seconds);
   fillTimezones(); if(cfg.timezone){ const t=$("tz-select"); if(t&&document.activeElement!==t) t.value=cfg.timezone; }
   DEBUG=!!cfg.debug_mode; const dt=$("dbg-toggle"); if(dt) dt.checked=DEBUG;
+  document.body.classList.toggle("debug-on", DEBUG);
   applyKpiVisibility(); const kt=$("kpi-toggle"); if(kt) kt.checked=(prefs.kpi!==false);
   if(LAST) apply(LAST);
   if(cfg.setup_complete===false) maybeShowWizard(cfg);
@@ -1506,6 +1509,7 @@ $("interval-input").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preve
 // ---- debug mode toggle (admin) ----
 $("dbg-toggle") && $("dbg-toggle").addEventListener("change",e=>{
   DEBUG=e.target.checked;
+  document.body.classList.toggle("debug-on", DEBUG);
   postJSON("/api/settings",{debug_mode:DEBUG}).then(res=>{
     if(res&&res.ok&&res.config) applySettings(res.config); else if(LAST) apply(LAST);
   });
