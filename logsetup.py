@@ -59,6 +59,22 @@ def _log_dir():
     return "."
 
 
+def log_dir():
+    """Directory where the action/system logs are written."""
+    return _log_dir()
+
+
+def log_files():
+    """Existing log file paths, for the troubleshooting download."""
+    d = _log_dir()
+    out = []
+    for f in (ACTION_FILE, SYSTEM_FILE):
+        p = os.path.join(d, f)
+        if os.path.exists(p):
+            out.append(p)
+    return out
+
+
 def _build(name, filename):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)

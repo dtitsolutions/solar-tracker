@@ -133,6 +133,39 @@ def update_version():
         "private": bool(token),
     }
 
+def build_logs_zip():
+    """Bundle the action/system logs + update logs into a zip for troubleshooting."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        try:
+            for p in logsetup.log_files():
+                z.write(p, arcname="logs/" + os.path.basename(p))
+        except Exception:                            # noqa: BLE001
+            pass
+        for p in (_UPDATE.get("log"), _UPDATE.get("verbose")):
+            if p and os.path.exists(p):
+                try:
+                    z.write(p, arcname="update/" + os.path.basename(p))
+                except Exception:                    # noqa: BLE001
+                    pass
+        info = [
+            "Solar Monitor — diagnostic bundle",
+            "generated : %s" % time.strftime("%Y-%m-%d %H:%M:%S %z"),
+            "deployed  : %s" % (_deployed_sha() or "unknown"),
+        ]
+        try:
+            s = config_store.get_settings()
+            info.append("timezone  : %s" % s.get("timezone", ""))
+            info.append("poll (s)  : %s" % s.get("poll_interval_seconds", ""))
+            info.append("log (s)   : %s" % s.get("log_interval_seconds", ""))
+        except Exception:                            # noqa: BLE001
+            pass
+        z.writestr("info.txt", "\n".join(info) + "\n")
+    return buf.getvalue()
+
+
 def request_update():
     """Drop a trigger file the host-side updater watches; it does the actual
     git pull + docker build + restart (a container can't rebuild itself).
@@ -1244,6 +1277,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(403, {"ok": False, "error": "admin only"})
                 return
             self._json(200, read_update_log())
+        elif path == "/api/logs/download":
+            if not config_store.is_admin(self._user()):
+                self._send(403, "text/plain; charset=utf-8", b"admin only")
+                return
+            try:
+                data = build_logs_zip()
+            except Exception as e:                       # noqa: BLE001
+                self._send(500, "text/plain; charset=utf-8",
+                           ("could not build logs: %s" % e).encode("utf-8"))
+                return
+            fname = "solar-monitor-logs-%s.zip" % time.strftime("%Y%m%d-%H%M%S")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % fname)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except Exception:                            # noqa: BLE001
+                pass
         else:
             self._send(404, "text/plain; charset=utf-8", b"not found")
 

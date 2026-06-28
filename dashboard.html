@@ -633,6 +633,13 @@
             </label>
           </div>
         </details>
+        <details class="ssub admin-only" id="sub-diag">
+          <summary>Diagnostics</summary>
+          <div class="ssub-body">
+            <div class="settings-note" style="margin:0 0 10px">Download the application + update logs as a zip to share when troubleshooting.</div>
+            <button type="button" class="connect-btn" id="btn-download-logs">Download logs (.zip)</button>
+          </div>
+        </details>
       </div>
     </details>
 
@@ -1064,8 +1071,6 @@ function apply(s){
     $("banner").classList.remove("show"); }
 
   // first run with no inverter: reveal Settings → Inverters (plants)
-  const ivIn=$("interval-input");
-  if(ivIn && s.poll_interval_seconds && document.activeElement!==ivIn) ivIn.value=s.poll_interval_seconds;
   if(!s.inverter_ip && !s.demo && !_promptedConnect){ _promptedConnect=true; showPage("settings");
     const adv=$("grp-advanced"); if(adv) adv.open=true; const si=$("sub-inverters"); if(si) si.open=true; }
 
@@ -1514,6 +1519,22 @@ $("dbg-toggle") && $("dbg-toggle").addEventListener("change",e=>{
     if(res&&res.ok&&res.config) applySettings(res.config); else if(LAST) apply(LAST);
   });
 });
+
+// ---- download logs (.zip) for troubleshooting ----
+$("btn-download-logs") && $("btn-download-logs").addEventListener("click",()=>{
+  const b=$("btn-download-logs"), was=b.textContent;
+  b.disabled=true; b.textContent="Preparing…";
+  // a plain navigation triggers the browser download (attachment), cookies included
+  const a=document.createElement("a"); a.href="/api/logs/download"; a.rel="noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>{ b.disabled=false; b.textContent=was; }, 1500);
+});
+
+// ---- recover after the device/tab was asleep (frozen clock) ----
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden){ try{ if(typeof pollOnce==="function") pollOnce(); }catch(_){ } }
+});
+window.addEventListener("focus",()=>{ try{ if(typeof pollOnce==="function") pollOnce(); }catch(_){ } });
 
 // ---- sign out (clears the session cookie) ----
 $("btn-logout").addEventListener("click",()=>{
