@@ -449,18 +449,21 @@ def _mb_runtime(ip, port, unit):
         ppv2 = _u32(blk, 18)             # 35109 ppv2 (Power4, U32, W)
         ppv = max(0, ppv1) + max(0, ppv2)
         data["ppv"] = ppv
-        active_power = _s16(blk, 80)     # 35140 active_power (PowerS, S16, W)
-        data["active_power"] = active_power
-        pbattery1 = _s32(blk, 164)       # 35182 pbattery1 (Power4S, S32, W)
-        data["pbattery1"] = pbattery1
+        # GoodWe's native signs are: active_power + = export, pbattery1 + = discharge.
+        # This project's dashboard/worker use + = import and + = charge, so flip both
+        # on output. House load is computed from the NATIVE values (library formula).
+        active_native = _s16(blk, 80)    # 35140 active_power (PowerS, S16, W)
+        pbatt_native = _s32(blk, 164)    # 35182 pbattery1 (Power4S, S32, W)
+        house = ppv1 + ppv2 + pbatt_native - active_native
+        data["active_power"] = -active_native      # + = importing / - = exporting
+        data["pbattery1"] = -pbatt_native          # + = charging  / - = discharging
+        data["house_consumption"] = max(0, house)
         data["temperature"] = round(_s16(blk, 152) / 10.0, 1)   # 35176 (Temp, S16, /10)
         e_total = _u32(blk, 182)         # 35191 e_total (Energy4, U32, /10 kWh)
         e_day = _u32(blk, 186)           # 35193 e_day  (Energy4, U32, /10 kWh)
         if e_total:
             data["e_total"] = round(e_total / 10.0, 1)
         data["e_day"] = round(e_day / 10.0, 1)
-        # House load, per the library's formula: ppv + pbattery1 - active_power
-        data["house_consumption"] = ppv1 + ppv2 + pbattery1 - active_power
     batt = _mb_read(ip, port, unit, 0x9088, 0x18, timeout=3)   # 37000, 24 regs (battery block)
     if batt:
         data["battery_soc"] = _u16(batt, 14)    # 37007 battery_soc (Integer, %)
