@@ -85,8 +85,13 @@ SCHEMA_STATEMENTS = [
         ip_address      VARCHAR(64)  NOT NULL DEFAULT '',
         is_enabled      TINYINT(1)   NOT NULL DEFAULT 1,
         sort_order      INT          NOT NULL DEFAULT 0,
+        battery_capacity_kwh DECIMAL(8,2) NOT NULL DEFAULT 0,
+        panel_capacity_w     INT          NOT NULL DEFAULT 0,
         created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    # Migrations for databases created before the capacity columns existed:
+    "ALTER TABLE inverters ADD COLUMN IF NOT EXISTS battery_capacity_kwh DECIMAL(8,2) NOT NULL DEFAULT 0",
+    "ALTER TABLE inverters ADD COLUMN IF NOT EXISTS panel_capacity_w INT NOT NULL DEFAULT 0",
 ]
 
 
@@ -428,11 +433,14 @@ def list_inverters():
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, nickname, brand, ip_address, is_enabled, sort_order, created_at "
+            cur.execute("SELECT id, nickname, brand, ip_address, is_enabled, sort_order, "
+                        "battery_capacity_kwh, panel_capacity_w, created_at "
                         "FROM inverters ORDER BY sort_order, created_at")
             rows = list(cur.fetchall())
             for r in rows:
                 r["is_enabled"] = bool(r["is_enabled"])
+                r["battery_capacity_kwh"] = float(r.get("battery_capacity_kwh") or 0)
+                r["panel_capacity_w"] = int(r.get("panel_capacity_w") or 0)
                 if r.get("created_at") is not None:
                     r["created_at"] = str(r["created_at"])
             return rows
@@ -444,11 +452,14 @@ def get_inverter(inverter_id):
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, nickname, brand, ip_address, is_enabled, sort_order "
+            cur.execute("SELECT id, nickname, brand, ip_address, is_enabled, sort_order, "
+                        "battery_capacity_kwh, panel_capacity_w "
                         "FROM inverters WHERE id = %s", (inverter_id,))
             row = cur.fetchone()
             if row:
                 row["is_enabled"] = bool(row["is_enabled"])
+                row["battery_capacity_kwh"] = float(row.get("battery_capacity_kwh") or 0)
+                row["panel_capacity_w"] = int(row.get("panel_capacity_w") or 0)
             return row
     finally:
         conn.close()
@@ -489,7 +500,21 @@ def _find_name_conflict(cur, name, exclude_id=None):
     return False
 
 
-def add_inverter(nickname, brand, ip_address):
+def _clamp_cap_kwh(v):
+    try:
+        return max(0.0, min(10000.0, float(v)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clamp_cap_w(v):
+    try:
+        return max(0, min(10000000, int(float(v))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def add_inverter(nickname, brand, ip_address, battery_capacity_kwh=0, panel_capacity_w=0):
     """Create an inverter. Returns (id, error). brand must be supported."""
     brand = (brand or "goodwe").lower()
     if brand not in SUPPORTED_BRANDS:
@@ -500,6 +525,8 @@ def add_inverter(nickname, brand, ip_address):
         return None, "IP address is required"
     if not _valid_ip_or_host(ip_address):
         return None, f"'{ip_address}' is not a valid IP address"
+    batt = _clamp_cap_kwh(battery_capacity_kwh)
+    pan = _clamp_cap_w(panel_capacity_w)
     inv_id = str(uuid.uuid4())
     with _write_lock:
         conn = _connect()
@@ -513,15 +540,17 @@ def add_inverter(nickname, brand, ip_address):
                 cur.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM inverters")
                 order = cur.fetchone()["n"]
                 cur.execute(
-                    "INSERT INTO inverters (id, nickname, brand, ip_address, is_enabled, sort_order) "
-                    "VALUES (%s, %s, %s, %s, 1, %s)",
-                    (inv_id, nickname, brand, ip_address, order))
+                    "INSERT INTO inverters (id, nickname, brand, ip_address, is_enabled, "
+                    "sort_order, battery_capacity_kwh, panel_capacity_w) "
+                    "VALUES (%s, %s, %s, %s, 1, %s, %s, %s)",
+                    (inv_id, nickname, brand, ip_address, order, batt, pan))
         finally:
             conn.close()
     return inv_id, None
 
 
-def update_inverter(inverter_id, nickname=None, brand=None, ip_address=None, is_enabled=None):
+def update_inverter(inverter_id, nickname=None, brand=None, ip_address=None, is_enabled=None,
+                    battery_capacity_kwh=None, panel_capacity_w=None):
     if brand is not None:
         brand = brand.lower()
         if brand not in SUPPORTED_BRANDS:
@@ -553,6 +582,10 @@ def update_inverter(inverter_id, nickname=None, brand=None, ip_address=None, is_
                     sets.append("ip_address = %s"); params.append(ip_address)
                 if is_enabled is not None:
                     sets.append("is_enabled = %s"); params.append(1 if is_enabled else 0)
+                if battery_capacity_kwh is not None:
+                    sets.append("battery_capacity_kwh = %s"); params.append(_clamp_cap_kwh(battery_capacity_kwh))
+                if panel_capacity_w is not None:
+                    sets.append("panel_capacity_w = %s"); params.append(_clamp_cap_w(panel_capacity_w))
                 if not sets:
                     return None
                 params.append(inverter_id)

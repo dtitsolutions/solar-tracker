@@ -73,6 +73,8 @@ def _run(params, live, health, stop):
     demo = params["demo"]
     poll = max(1, params["poll"])
     logiv = max(1, params["log"])
+    batt_cap = params.get("battery_capacity_kwh") or 0
+    panel_cap = params.get("panel_capacity_w") or 0
     try:
         logsetup.set_timezone(params.get("tz", "UTC"))
     except Exception:
@@ -224,6 +226,7 @@ def _run(params, live, health, stop):
                 "inverter_brand": brand, "inverter_ip": ("demo" if demo else ip),
                 "model": model, "serial": serial, "data": data, "units": units,
                 "firmware": meta.get("firmware"), "rated_power": meta.get("rated_power"),
+                "battery_capacity_kwh": batt_cap, "panel_capacity_w": panel_cap,
                 "grid_status": status, "grid_status_src": reason, "demo": demo,
                 "poll_interval_seconds": poll, "log_interval_seconds": logiv,
                 "ts": time.time(),
@@ -305,6 +308,8 @@ def _start(inv, demo, poll, logiv, tz):
     params = {"id": inv["id"], "brand": inv.get("brand") or "goodwe",
               "ip": inv.get("ip_address") or "", "serial": inv.get("serial") or "",
               "nickname": inv.get("nickname") or inv["id"],
+              "battery_capacity_kwh": inv.get("battery_capacity_kwh") or 0,
+              "panel_capacity_w": inv.get("panel_capacity_w") or 0,
               "demo": demo, "poll": poll, "log": logiv, "tz": tz}
     p = mp.Process(target=_run, args=(params, _live, _health, stop_evt), daemon=True,
                    name="inv-" + str(inv["id"])[:8])
