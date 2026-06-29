@@ -1480,7 +1480,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             d = self._read_json()
             ip = (d.get("ip_address") or "").strip()
-            inv_id, err = config_store.add_inverter(d.get("nickname"), d.get("brand") or "goodwe", ip)
+            inv_id, err = config_store.add_inverter(
+                d.get("nickname"), d.get("brand") or "goodwe", ip,
+                battery_capacity_kwh=d.get("battery_capacity_kwh", 0),
+                panel_capacity_w=d.get("panel_capacity_w", 0))
             if err:
                 self._json(400, {"ok": False, "error": err})
                 return
@@ -1499,7 +1502,9 @@ class Handler(BaseHTTPRequestHandler):
             ip = d.get("ip_address")
             err = config_store.update_inverter(
                 inv_id, nickname=d.get("nickname"), brand=d.get("brand"),
-                ip_address=ip, is_enabled=d.get("is_enabled"))
+                ip_address=ip, is_enabled=d.get("is_enabled"),
+                battery_capacity_kwh=d.get("battery_capacity_kwh"),
+                panel_capacity_w=d.get("panel_capacity_w"))
             if err:
                 self._json(400, {"ok": False, "error": err})
                 return
