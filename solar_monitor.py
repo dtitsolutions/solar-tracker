@@ -1407,7 +1407,8 @@ class Handler(BaseHTTPRequestHandler):
                 updates["tiles"] = d["tiles"]
             # Advanced settings: admin only
             advanced_keys = ("dashboard_name", "inverter_ip", "poll_interval_seconds",
-                             "log_interval_seconds", "remote_db", "timezone", "debug_mode")
+                             "log_interval_seconds", "remote_db", "timezone", "debug_mode",
+                             "battery_capacity_kwh", "panel_capacity_w")
             new_tz = None
             if any(k in d for k in advanced_keys):
                 if not admin:
@@ -1417,6 +1418,10 @@ class Handler(BaseHTTPRequestHandler):
                     updates["dashboard_name"] = str(d["dashboard_name"])[:60]
                 if "debug_mode" in d:
                     updates["debug_mode"] = bool(d["debug_mode"])
+                if "battery_capacity_kwh" in d:
+                    updates["battery_capacity_kwh"] = d["battery_capacity_kwh"]
+                if "panel_capacity_w" in d:
+                    updates["panel_capacity_w"] = d["panel_capacity_w"]
                 if "timezone" in d:
                     new_tz = str(d["timezone"])[:64]
                     updates["timezone"] = new_tz
