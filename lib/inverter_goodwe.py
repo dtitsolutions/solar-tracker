@@ -469,12 +469,16 @@ def _mb_runtime(ip, port, unit):
 
 class _ModbusInverter:
     """Adapts the Modbus-TCP reader to the same interface the worker expects."""
-    def __init__(self, ip, port, unit, model, serial):
+    def __init__(self, ip, port, unit, model, serial, rated_power=None,
+                 firmware=None, arm_firmware=None):
         self.ip = ip
         self.port = port
         self.unit = unit
         self.model_name = model or "GoodWe (Modbus TCP)"
         self.serial_number = serial or ""
+        self.rated_power = rated_power
+        self.firmware = firmware
+        self.arm_firmware = arm_firmware
 
     def sensors(self):
         return [_FakeSensor(sid, label.strip(" -"), "W") for sid, label in SUMMARY]
@@ -487,17 +491,22 @@ class _ModbusInverter:
 
 async def _connect_modbus_tcp(ip):
     """Probe Modbus TCP :502 and, if it answers, return a Modbus inverter object.
-    Confirms the link by decoding the device-info block (model + serial)."""
+    Confirms the link by decoding the device-info block (model, serial, rated
+    power, firmware) — same layout the goodwe library reads at 0x88B8."""
     import asyncio
     loop = asyncio.get_event_loop()
 
     def _probe():
-        di = _mb_read(ip, _MB_PORT, _MB_UNIT, 0x88B8, 0x21, timeout=3)   # device info
+        di = _mb_read(ip, _MB_PORT, _MB_UNIT, 0x88B8, 0x21, timeout=3)   # device info (66 bytes)
         if not di:
             return None
-        serial = _ascii(di, 6, 16)
-        model = _ascii(di, 22, 10)
-        return _ModbusInverter(ip, _MB_PORT, _MB_UNIT, model, serial)
+        rated = _u16(di, 2) or None                  # 35001 rated power (W)
+        serial = _ascii(di, 6, 16)                   # 35003-35010
+        model = _ascii(di, 22, 10)                   # 35011-35015
+        firmware = _ascii(di, 42, 12) or None        # 35021-35027 (DSP)
+        arm_fw = _ascii(di, 54, 12) or None          # 35027-35032 (ARM)
+        return _ModbusInverter(ip, _MB_PORT, _MB_UNIT, model, serial,
+                               rated_power=rated, firmware=firmware, arm_firmware=arm_fw)
 
     try:
         inv = await loop.run_in_executor(None, _probe)

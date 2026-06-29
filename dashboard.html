@@ -607,6 +607,20 @@
             </div>
           </div>
         </details>
+        <details class="ssub" id="sub-capacity">
+          <summary>System capacity</summary>
+          <div class="ssub-body">
+            <div class="settings-note" style="margin:0 0 10px">Used to estimate battery time-to-full / time-to-empty on the dashboard.</div>
+            <div class="name-row">
+              <label for="batt-cap-input">Total battery capacity (kWh)</label>
+              <input id="batt-cap-input" type="number" min="0" max="10000" step="0.1" placeholder="e.g. 33" autocomplete="off"></div>
+            <div class="name-row">
+              <label for="panel-cap-input">Total panel capacity (kWp)</label>
+              <input id="panel-cap-input" type="number" min="0" max="10000" step="0.1" placeholder="e.g. 12.4" autocomplete="off"></div>
+            <div class="btn-row"><button class="connect-btn" id="btn-capacity-save">Save</button></div>
+            <div class="mysql-result" id="capacity-result"></div>
+          </div>
+        </details>
         <details class="ssub" id="sub-poll">
           <summary>Polling &amp; logging</summary>
           <div class="ssub-body">
@@ -958,6 +972,20 @@
 <script>
 const REFRESH_MS = __REFRESH_MS__;
 const CFG = __CONFIG__;
+let BATT_CAP_KWH = 0;   // total battery capacity (kWh), set from settings
+// Estimate battery time-to-full (charging) / time-to-empty (discharging).
+function battEta(dir, soc, powerW){
+  if(!(BATT_CAP_KWH>0) || soc==null || !(powerW>0)) return "";
+  let kwh;
+  if(dir==="charge") kwh = BATT_CAP_KWH * Math.max(0,(100-soc))/100;
+  else if(dir==="discharge") kwh = BATT_CAP_KWH * Math.max(0,soc)/100;
+  else return "";
+  const hours = kwh / (powerW/1000);
+  if(!isFinite(hours) || hours<=0) return "";
+  const h=Math.floor(hours), m=Math.round((hours-h)*60);
+  const hm = (h>0?(h+"h "):"") + (m<10&&h>0?("0"+m):m) + "m";
+  return hm + (dir==="charge" ? " to full" : " to empty");
+}
 // Set to a known-good firmware string (e.g. per your inverter) to flag older
 // firmware as "Update available". Left blank, a reported firmware shows "Latest".
 const LATEST_FIRMWARE = "";
@@ -1201,7 +1229,10 @@ function apply(s){
   setTxt("k-grid-sub", gs==="off"?"off-grid":(gridDir==="import"?"importing":gridDir==="export"?"exporting":"idle"));
   { const gb=$("k-grid-bar"); if(gb) gb.style.background=(gridDir==="export"?"#22c55e":"var(--grid)"); }
   setTxt("k-batt", d.battery_soc!=null?Math.round(num(d.battery_soc)):"—");
-  setTxt("k-batt-sub", battDir==="charge"?("charging "+_kw(battMag)+" kW"):battDir==="discharge"?("discharging "+_kw(battMag)+" kW"):"idle");
+  { let bsub = battDir==="charge"?("charging "+_kw(battMag)+" kW"):battDir==="discharge"?("discharging "+_kw(battMag)+" kW"):"idle";
+    const eta = battEta(battDir, d.battery_soc!=null?Math.round(num(d.battery_soc)):null, battMag||0);
+    if(eta) bsub += " · " + eta;
+    setTxt("k-batt-sub", bsub); }
   setTxt("k-imp", d.imp_today!=null?_kwh(d.imp_today):"—");
   setTxt("k-exp", d.exp_today!=null?_kwh(d.exp_today):"—");
 
@@ -1244,6 +1275,11 @@ function applySettings(cfg){
   prefs=Object.assign({},STORE_DEFAULTS,(cfg.tiles||{}));
   setIf("interval-input",cfg.poll_interval_seconds);
   setIf("log-input",cfg.log_interval_seconds);
+  BATT_CAP_KWH = (typeof cfg.battery_capacity_kwh==="number") ? cfg.battery_capacity_kwh : 0;
+  if($("batt-cap-input") && document.activeElement!==$("batt-cap-input"))
+    $("batt-cap-input").value = BATT_CAP_KWH>0 ? BATT_CAP_KWH : "";
+  if($("panel-cap-input") && document.activeElement!==$("panel-cap-input"))
+    $("panel-cap-input").value = (cfg.panel_capacity_w>0) ? (cfg.panel_capacity_w/1000) : "";
   fillTimezones(); if(cfg.timezone){ const t=$("tz-select"); if(t&&document.activeElement!==t) t.value=cfg.timezone; }
   DEBUG=!!cfg.debug_mode; const dt=$("dbg-toggle"); if(dt) dt.checked=DEBUG;
   document.body.classList.toggle("debug-on", DEBUG);
@@ -1518,6 +1554,19 @@ $("dbg-toggle") && $("dbg-toggle").addEventListener("change",e=>{
   postJSON("/api/settings",{debug_mode:DEBUG}).then(res=>{
     if(res&&res.ok&&res.config) applySettings(res.config); else if(LAST) apply(LAST);
   });
+});
+
+// ---- system capacity (battery / panel) ----
+$("btn-capacity-save") && $("btn-capacity-save").addEventListener("click",()=>{
+  const bk=parseFloat($("batt-cap-input").value); const pk=parseFloat($("panel-cap-input").value);
+  const body={ battery_capacity_kwh:(isFinite(bk)&&bk>0)?bk:0,
+               panel_capacity_w:(isFinite(pk)&&pk>0)?Math.round(pk*1000):0 };
+  const r=$("capacity-result"); if(r){ r.textContent="Saving…"; r.className="mysql-result"; }
+  postJSON("/api/settings",body).then(res=>{
+    if(res&&res.ok&&res.config){ applySettings(res.config);
+      if(r){ r.textContent="Saved."; r.className="mysql-result ok"; } }
+    else if(r){ r.textContent=(res&&res.error)||"Could not save."; r.className="mysql-result err"; }
+  }).catch(()=>{ if(r){ r.textContent="Could not reach the server."; r.className="mysql-result err"; } });
 });
 
 // ---- download logs (.zip) for troubleshooting ----

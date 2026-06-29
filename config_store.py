@@ -170,6 +170,13 @@ def _coerce_int(value, fallback):
         return fallback
 
 
+def _coerce_float(value, fallback):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def get_settings():
     """Return the full settings object used by the API/UI."""
     conn = _connect()
@@ -191,6 +198,8 @@ def get_settings():
         "debug_mode": (raw.get("debug_mode", "0") == "1"),
         "poll_interval_seconds": _coerce_int(raw.get("poll_interval_seconds"), 5),
         "log_interval_seconds": _coerce_int(raw.get("log_interval_seconds"), 30),
+        "battery_capacity_kwh": _coerce_float(raw.get("battery_capacity_kwh"), 0),
+        "panel_capacity_w": _coerce_int(raw.get("panel_capacity_w"), 0),
         "remote_db": {
             "host": raw.get("remote_db_host", "") or "",
             "port": _coerce_int(raw.get("remote_db_port"), 3306),
@@ -221,6 +230,10 @@ def update_settings(updates):
         scalar["poll_interval_seconds"] = str(max(1, min(3600, _coerce_int(updates["poll_interval_seconds"], 5))))
     if "log_interval_seconds" in updates:
         scalar["log_interval_seconds"] = str(max(1, min(86400, _coerce_int(updates["log_interval_seconds"], 30))))
+    if "battery_capacity_kwh" in updates:
+        scalar["battery_capacity_kwh"] = str(max(0.0, min(10000.0, _coerce_float(updates["battery_capacity_kwh"], 0))))
+    if "panel_capacity_w" in updates:
+        scalar["panel_capacity_w"] = str(max(0, min(10000000, _coerce_int(updates["panel_capacity_w"], 0))))
     if isinstance(updates.get("remote_db"), dict):
         remote = updates["remote_db"]
         column_map = {"host": "remote_db_host", "port": "remote_db_port", "user": "remote_db_user",
