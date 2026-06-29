@@ -759,7 +759,7 @@
     </div>
     <div class="kpi">
       <div class="kpi-top"><span class="kpi-ic" style="background:rgba(52,211,153,.16)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--batt)" stroke-width="1.9"><rect x="3" y="8" width="15" height="8" rx="2"/><path d="M20 11v2" stroke-linecap="round"/></svg></span>Battery</div>
-      <div class="kpi-val"><span id="k-batt">—</span><span class="un">%</span></div>
+      <div class="kpi-val"><span id="k-batt">—</span><span class="un">%</span><span class="un" id="k-batt-kwh"></span></div>
       <div class="kpi-sub" id="k-batt-sub">—</div><div class="kpi-bar" id="k-batt-bar" style="background:var(--batt)"></div>
     </div>
     <div class="kpi">
@@ -1220,6 +1220,9 @@ function apply(s){
   setTxt("k-grid-sub", gs==="off"?"off-grid":(gridDir==="import"?"importing":gridDir==="export"?"exporting":"idle"));
   { const gb=$("k-grid-bar"); if(gb) gb.style.background=(gridDir==="export"?"#22c55e":"var(--grid)"); }
   setTxt("k-batt", d.battery_soc!=null?Math.round(num(d.battery_soc)):"—");
+  { const socNow = d.battery_soc!=null ? num(d.battery_soc) : null;
+    const kwhLeft = (BATT_CAP_KWH>0 && socNow!=null) ? (BATT_CAP_KWH*socNow/100) : null;
+    setTxt("k-batt-kwh", kwhLeft!=null ? (" · "+kwhLeft.toFixed(1)+" kWh") : ""); }
   { let bsub = battDir==="charge"?("charging "+_kw(battMag)+" kW"):battDir==="discharge"?("discharging "+_kw(battMag)+" kW"):"idle";
     const eta = battEta(battDir, d.battery_soc!=null?Math.round(num(d.battery_soc)):null, battMag||0);
     if(eta) bsub += " · " + eta;
