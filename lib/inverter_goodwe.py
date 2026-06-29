@@ -439,30 +439,31 @@ def _ascii(b, o, n): return b[o:o + n].decode("ascii", "replace").replace("\x00"
 
 def _mb_runtime(ip, port, unit):
     """Read GoodWe ET-family runtime registers over Modbus TCP and normalize to
-    the project's data keys. PV power and SoC are high-confidence; grid/battery
-    are best-effort ET offsets (verify against SEMS+ with `cli.py tcp --debug`)."""
-    blk = _mb_read(ip, port, unit, 0x891C, 0x7D, timeout=3)   # running data (250 bytes)
+    the project's data keys. Register map mirrors the goodwe library's et.py
+    (block 0x891C / 35100), so values match what the SEMS/SolarGo app shows.
+    Byte offset into the block = (register - 35100) * 2."""
     data = {}
+    blk = _mb_read(ip, port, unit, 0x891C, 0x7D, timeout=3)   # 35100, 125 regs (250 bytes)
     if blk:
-        ppv1 = _u32(blk, 10)
-        ppv2 = _u32(blk, 18)
-        data["ppv"] = ppv1 + ppv2
-        # best-effort ET offsets — confirm with --debug + SEMS+:
-        data["active_power"] = _s32(blk, 80)             # grid power (+import / -export)
-        try:
-            data["temperature"] = _s16(blk, 96) / 10.0
-        except Exception:                                # noqa: BLE001
-            pass
-        vbat = _u16(blk, 160) / 10.0
-        ibat = _s16(blk, 162) / 10.0
-        data["pbattery1"] = round(vbat * ibat)           # + charge / - discharge (verify)
-    soc = _mb_read(ip, port, unit, 0x908F, 1, timeout=3)     # battery SoC (37007)
-    if soc:
-        data["battery_soc"] = _u16(soc, 0)
-    # House load via the energy balance (avoids an uncertain register):
-    if "ppv" in data and "active_power" in data:
-        data["house_consumption"] = max(
-            0, data["ppv"] + data["active_power"] - data.get("pbattery1", 0))
+        ppv1 = _u32(blk, 10)             # 35105 ppv1 (Power4, U32, W)
+        ppv2 = _u32(blk, 18)             # 35109 ppv2 (Power4, U32, W)
+        ppv = max(0, ppv1) + max(0, ppv2)
+        data["ppv"] = ppv
+        active_power = _s16(blk, 80)     # 35140 active_power (PowerS, S16, W)
+        data["active_power"] = active_power
+        pbattery1 = _s32(blk, 164)       # 35182 pbattery1 (Power4S, S32, W)
+        data["pbattery1"] = pbattery1
+        data["temperature"] = round(_s16(blk, 152) / 10.0, 1)   # 35176 (Temp, S16, /10)
+        e_total = _u32(blk, 182)         # 35191 e_total (Energy4, U32, /10 kWh)
+        e_day = _u32(blk, 186)           # 35193 e_day  (Energy4, U32, /10 kWh)
+        if e_total:
+            data["e_total"] = round(e_total / 10.0, 1)
+        data["e_day"] = round(e_day / 10.0, 1)
+        # House load, per the library's formula: ppv + pbattery1 - active_power
+        data["house_consumption"] = ppv1 + ppv2 + pbattery1 - active_power
+    batt = _mb_read(ip, port, unit, 0x9088, 0x18, timeout=3)   # 37000, 24 regs (battery block)
+    if batt:
+        data["battery_soc"] = _u16(batt, 14)    # 37007 battery_soc (Integer, %)
     return data
 
 
