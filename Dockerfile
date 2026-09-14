@@ -1,3 +1,4 @@
+#dan
 # Solar Monitor collector + API (Python) — polls the inverter, writes MongoDB,
 # publishes live state to Redis, and exposes the config/auth API used by the
 # Node web tier.
